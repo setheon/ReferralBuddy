@@ -1,0 +1,41 @@
+# ════════════════════════════════════════════════════════════
+#  ReferralBuddy — Docker Compose
+#  Usage:  docker compose up -d
+# ════════════════════════════════════════════════════════════
+
+version: "3.9"
+
+services:
+  referralbuddy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: referralbuddy
+    restart: unless-stopped
+
+    # Pass secrets via environment variables — never bake them into the image
+    env_file:
+      - .env
+
+    environment:
+      NODE_ENV: production
+      DB_PATH: /app/data/referralbuddy.db
+
+    volumes:
+      # Persist the SQLite database across container restarts
+      - referralbuddy_data:/app/data
+
+    # No ports needed — the bot uses outbound WebSocket only
+    # Uncomment if you add an HTTP health endpoint later:
+    # ports:
+    #   - "3000:3000"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  referralbuddy_data:
+    driver: local

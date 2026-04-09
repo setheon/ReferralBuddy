@@ -1,0 +1,42 @@
+# ════════════════════════════════════════════════════════════
+#  ReferralBuddy — systemd service unit (bare-metal / VPS)
+#
+#  Setup:
+#    1.  Copy to /etc/systemd/system/referralbuddy.service
+#    2.  Edit WorkingDirectory and EnvironmentFile paths below
+#    3.  systemctl daemon-reload
+#    4.  systemctl enable --now referralbuddy
+# ════════════════════════════════════════════════════════════
+
+[Unit]
+Description=ReferralBuddy Discord Bot
+Documentation=https://github.com/yourorg/referralbuddy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=referralbuddy
+Group=referralbuddy
+
+# ── Adjust these paths ────────────────────────────────────
+WorkingDirectory=/opt/referralbuddy
+EnvironmentFile=/opt/referralbuddy/.env
+# ─────────────────────────────────────────────────────────
+
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=referralbuddy
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/referralbuddy/data
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,57 @@
+# ════════════════════════════════════════════════════════════
+#  ReferralBuddy — Podman Quadlet (systemd-native containers)
+#
+#  Quadlet is the modern, recommended way to run containers
+#  under systemd with Podman (Podman ≥ 4.4, RHEL 9, Fedora 37+).
+#
+#  Installation:
+#    1.  Copy this file to:
+#          ~/.config/containers/systemd/referralbuddy.container
+#        (rootless)  OR
+#          /etc/containers/systemd/referralbuddy.container
+#        (root / system)
+#
+#    2.  Run:  systemctl --user daemon-reload
+#          OR  systemctl daemon-reload  (root)
+#
+#    3.  Start: systemctl --user start referralbuddy
+#          OR   systemctl start referralbuddy  (root)
+#
+#    4.  Enable on boot:
+#          systemctl --user enable referralbuddy
+# ════════════════════════════════════════════════════════════
+
+[Unit]
+Description=ReferralBuddy Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+# Build from local source (podman will build the image automatically)
+# Alternatively replace with a registry image:
+#   Image=ghcr.io/yourorg/referralbuddy:latest
+Image=localhost/referralbuddy:latest
+
+ContainerName=referralbuddy
+
+# Environment — store secrets in a separate EnvironmentFile
+EnvironmentFile=%h/.config/referralbuddy/referralbuddy.env
+
+# Persist database
+Volume=%h/.local/share/referralbuddy/data:/app/data:Z
+
+# Security hardening
+NoNewPrivileges=true
+ReadOnlyRootfs=true
+# /app/data is writable via the volume above
+Tmpfs=/tmp
+
+# Auto-restart policy
+AutoUpdate=registry
+
+[Service]
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=default.target
