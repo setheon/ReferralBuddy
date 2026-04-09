@@ -151,7 +151,7 @@ function serverStatsEmbed({ guildName, guildIcon, periodLabel, topInviters, topE
 
 // ─── Setup wizard embeds ──────────────────────────────────────────────────────
 
-const SETUP_STEPS = ['Log Channel', 'Referral Channel', 'Reward Roles', 'Confirm'];
+const SETUP_STEPS = ['Log Channel', 'Referral Channel', 'Level Roles', 'Reward Roles', 'Confirm'];
 
 function _stepBar(current) {
   return SETUP_STEPS.map((s, i) => {
@@ -204,38 +204,66 @@ function setupStepEmbed(step, data = {}) {
       done('Log Channel',      `<#${data.logChannelId}>`),
       done('Referral Channel', `<#${data.referralChannelId}>`),
       {
-        name:  '📋  Step 3 — Reward Roles',
+        name:  '📋  Step 3 — Level Roles',
         value: [
-          'Define roles members unlock when they hit a points threshold.',
-          'Enter **one reward per line** in this format:',
-          '```',
-          '<points> @RoleName',
-          '```',
-          '**Example:**',
-          '```',
-          '50   @Newcomer Recruiter',
-          '250  @Active Recruiter',
-          '1000 @Elite Recruiter',
-          '```',
+          'Which roles should trigger **inviter point awards**?',
+          'These are roles your levelling bot assigns (e.g. "Level 1", "Level 10").',
+          'When **Friend B** gets one of these roles, **Member A** (their inviter) earns the points.',
           '',
-          'Type `skip` to set no reward roles right now.',
-          '*(You can re-run `/setup` later to add them)*',
+          'Format: `<role_id_or_@mention> <points>` — one per line',
+          '```',
+          '123456789012345678 10',
+          '@Level 10 100',
+          '```',
+          '• Min: **0 roles** (type `skip`)  •  Max: **20 roles**',
+          '• Points go to the **inviter**, not the member who levelled up',
         ].join('\n'),
       }
     );
   }
 
   if (step === 3) {
-    const roleLines = data.rewardRoles?.length
-      ? data.rewardRoles.map(r => `• **${r.pointsRequired.toLocaleString()} pts** → <@&${r.roleId}> (${r.roleName})`).join('\n')
-      : '*None configured*';
+    const levelLines = data.levelRoles?.length
+      ? data.levelRoles.map(r => `• <@&${r.roleId}> (${r.roleName}) → **+${r.points} pts** to inviter`).join('\n')
+      : '*None configured (skipped)*';
 
     embed.addFields(
       done('Log Channel',      `<#${data.logChannelId}>`),
       done('Referral Channel', `<#${data.referralChannelId}>`),
-      done('Reward Roles',     roleLines),
+      done('Level Roles',      levelLines),
       {
-        name:  '📋  Step 4 — Confirm',
+        name:  '📋  Step 4 — Reward Roles',
+        value: [
+          'Optionally define roles that **Member A earns** when their own points hit a threshold.',
+          'These are roles assigned to the inviter as a reward.',
+          '',
+          'Format: `<points> @RoleName` — one per line',
+          '```',
+          '100  @Newcomer Recruiter',
+          '500  @Silver Recruiter',
+          '2000 @Gold Recruiter',
+          '```',
+          'Type `skip` if you don\'t need point-threshold reward roles.',
+        ].join('\n'),
+      }
+    );
+  }
+
+  if (step === 4) {
+    const levelLines = data.levelRoles?.length
+      ? data.levelRoles.map(r => `• <@&${r.roleId}> → **+${r.points} pts** to inviter`).join('\n')
+      : '*None*';
+    const rewardLines = data.rewardRoles?.length
+      ? data.rewardRoles.map(r => `• **${r.pointsRequired.toLocaleString()} pts** → <@&${r.roleId}> (${r.roleName})`).join('\n')
+      : '*None*';
+
+    embed.addFields(
+      done('Log Channel',      `<#${data.logChannelId}>`),
+      done('Referral Channel', `<#${data.referralChannelId}>`),
+      done('Level Roles',      levelLines),
+      done('Reward Roles',     rewardLines),
+      {
+        name:  '📋  Step 5 — Confirm',
         value: [
           'Does everything look correct?',
           '',

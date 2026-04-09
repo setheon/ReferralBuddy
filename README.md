@@ -1,6 +1,6 @@
 # 🔗 ReferralBuddy
 
-A feature-complete Discord referral tracking bot. Members get a personal invite link, earn points when their referrals grow in the server, and unlock reward roles at configurable thresholds — all logged in real-time to a dedicated channel.
+A Discord referral tracking bot. Members get a personal invite link, earn points when their referrals level up in the server, and unlock reward roles at configurable thresholds — all logged in real-time to a dedicated channel.
 
 ---
 
@@ -11,7 +11,7 @@ A feature-complete Discord referral tracking bot. Members get a personal invite 
 3. [Prerequisites](#prerequisites)
 4. [Discord Developer Portal Setup](#discord-developer-portal-setup)
 5. [Installation & First Run](#installation--first-run)
-6. [Bot Setup Wizard (`/setup`)](#bot-setup-wizard-setup)
+6. [Setup Wizard (`/setup`)](#setup-wizard-setup)
 7. [Commands Reference](#commands-reference)
 8. [Level Bot Integration](#level-bot-integration)
 9. [Deployment Options](#deployment-options)
@@ -31,30 +31,44 @@ A feature-complete Discord referral tracking bot. Members get a personal invite 
 
 | Feature | Detail |
 |---|---|
-| **Invite tracking** | Snapshots all guild invites on startup. Diffs use-counts on every join to detect which invite was used. |
-| **Personal referral links** | Each member gets a unique, permanent invite code via button or `/referral`. |
-| **Points system** | `+1` on join · `+10` at Level 1 · `+100` at Level 10 |
-| **Points ledger** | Every transaction is an immutable row with a timestamp. |
-| **Reward roles** | Configurable point thresholds that auto-assign Discord roles. |
-| **Fancy log channel** | Colour-coded embeds for joins, leaves, points, rewards, invites, and errors. |
+| **Invite tracking** | Snapshots all guild invites on startup. Diffs use-counts on every join to attribute which invite was used. |
+| **Personal referral links** | Each member gets a unique, permanent invite link via button or `/referral`. |
+| **Join points** | Inviter (Member A) earns **+1 pt** when their referral (Friend B) joins. |
+| **Level role points** | When Friend B receives a configured level role from your levelling bot, Member A earns the points you set for that role. Supports 0–20 level roles per server, each with custom point values. |
+| **Points ledger** | Every transaction is an immutable row with a timestamp — nothing is ever overwritten. |
+| **Reward roles** | Member A can earn Discord roles when their own point total crosses configurable thresholds. |
+| **Fancy log channel** | Colour-coded embeds for joins, leaves, points, reward grants, invites, and errors. |
 | **Stats command** | Personal, member-lookup, and server-wide stats for any time period. |
 | **Leaderboard** | Quick top-10 inviters and earners. |
-| **Admin tools** | Add/remove/set points, view history, re-post the panel. |
-| **Setup wizard** | Guided channel-message wizard — no JSON editing required. |
+| **Admin tools** | Manually add/remove/set points, view history, re-post the referral panel. |
+| **Setup wizard** | 5-step guided channel wizard — no config files to edit. |
 
 ---
 
 ## How It Works
 
+### Terminology
+
+| Term | Meaning |
+|---|---|
+| **Member A** | The existing server member who shared their referral link |
+| **Friend B** | The new member who joined using Member A's link |
+| **Level role** | A role assigned by your levelling bot (e.g. MEE6, Arcane) when Friend B reaches a level |
+| **Reward role** | A role ReferralBuddy assigns to Member A when their points hit a threshold |
+
+---
+
 ### Invite Detection
 
-Discord does not tell you which invite a member used when they join. ReferralBuddy works around this by:
+Discord does not tell you which invite a new member used when they join. ReferralBuddy works around this by:
 
-1. **On startup / guild join** — fetching every invite in every guild and storing `{ code, inviterId, uses }` in SQLite.
-2. **On `guildMemberAdd`** — fetching a fresh snapshot and comparing use-counts. The invite whose count increased by 1 is the one the new member used.
-3. **Referral invite fallback** — if an invite disappeared between the join event and the fetch (deleted/expired after use), the bot checks if exactly one known referral invite is now missing and attributes the join to its owner.
+1. **On startup / bot added to guild** — fetches every invite and stores `{ code, inviterId, uses }` in SQLite.
+2. **On `guildMemberAdd`** — fetches a fresh snapshot and diffs the use-counts. The invite whose count increased by 1 is the one the new member used.
+3. **Referral invite fallback** — if an invite disappeared between the join event and the fetch (deleted or expired), the bot checks whether exactly one known referral invite is now missing and attributes the join to its owner.
 
-> **Limitation:** If two members join within milliseconds of each other using *different* invites, both counts increase simultaneously and the diff becomes ambiguous. This is a known Discord platform limitation that cannot be fully resolved. In practice it is extremely rare.
+> **Known limitation:** If two members join within milliseconds of each other on *different* invites, both use-counts increment simultaneously and the diff becomes ambiguous. This is a Discord platform constraint that cannot be fully resolved. It is extremely rare in practice.
+
+---
 
 ### Points Flow
 
@@ -65,45 +79,71 @@ Member A shares their referral link
 Friend B clicks the link and joins the server
          │
          ├─► guildMemberAdd fires
-         │       ├─ Diff invites → usedCode = A's code
-         │       ├─ recordJoin(B, inviter=A)
+         │       ├─ Diff invites  →  usedCode = A's referral code
+         │       ├─ recordJoin(B, inviter=A, code)
          │       └─ awardPoints(A, +1, "Referral join")
          │
          ▼
-Friend B reaches Level 1  (manual /level or automatic via level bot hook)
+Your levelling bot assigns Friend B a level role
+(e.g. "Level 1" role from MEE6)
          │
-         ├─► processMilestone(B, level=1)
-         │       ├─ getInviterForMember(B) → A
-         │       ├─ hasMilestone(B, A, 1)?  No → continue
-         │       ├─ recordMilestone(B, A, 1)
-         │       └─ awardPoints(A, +10, "Referral milestone: Level 1")
+         ├─► guildMemberUpdate fires
+         │       ├─ Detect role added to B
+         │       ├─ getLevelRoleByRoleId(roleId)  →  matched, points = 10
+         │       ├─ getInviterForMember(B)  →  A
+         │       ├─ hasMilestone(B, A, roleId)?  No → continue
+         │       ├─ recordMilestone(B, A, roleId)
+         │       └─ awardPoints(A, +10, "Level role: Level 1")
          │
          ▼
-Friend B reaches Level 10
-         └─► awardPoints(A, +100, "Referral milestone: Level 10")
+Friend B later receives the "Level 10" role
+         │
+         ├─► guildMemberUpdate fires
+         │       ├─ getLevelRoleByRoleId(roleId)  →  matched, points = 100
+         │       ├─ hasMilestone(B, A, roleId)?  No → continue
+         │       ├─ recordMilestone(B, A, roleId)
+         │       └─ awardPoints(A, +100, "Level role: Level 10")
+         │
+         ▼
+Member A's total points cross a reward threshold
+         └─► checkRewardRoles(A)
+                 ├─ A has 111 pts, threshold is 100  →  assign reward role
+                 └─ DM A: "You've unlocked @Recruiter!"
 ```
+
+**Key points:**
+
+- Points always go to **Member A** (the inviter), never to Friend B.
+- Each level role milestone is **idempotent** — if Friend B somehow receives the same role twice, points are only awarded once.
+- Level roles are configured per-server. There is no hardcoded "Level 1 = 10 pts" logic — you define the roles and points yourself.
+- Reward roles (for Member A) are separate from level roles (for Friend B) and are entirely optional.
+
+---
 
 ### Reward Roles
 
 After every `awardPoints` call the bot:
-1. Fetches all configured reward thresholds for the guild (sorted ascending).
-2. Checks the member's new total against each threshold.
-3. For any threshold the member has crossed **and does not already have the role**, it calls `member.roles.add()` and logs the event.
-4. Attempts a DM to the member announcing the reward.
+
+1. Fetches all configured reward role thresholds for the guild (sorted ascending by points).
+2. Compares Member A's new total against each threshold.
+3. For any threshold Member A has now crossed **and does not already have the role**, it assigns the role and logs the event.
+4. Attempts a DM to Member A announcing the reward.
+
+---
 
 ### Setup Wizard
 
-The `/setup` wizard uses Discord's **message collector** API. The bot sends an embed describing the next step, then waits up to **5 minutes** for the admin to type a response in the same channel. Responses are deleted automatically to keep the channel tidy. This approach was chosen because:
+The `/setup` wizard uses Discord's **message collector** API. The bot sends an embed describing the current step, then waits up to **5 minutes** for the admin to type a response in the same channel. Responses are deleted automatically. This approach was chosen because:
 
-- Discord's modal dialogs (pop-up forms) are limited to 5 fields and expire after 3 minutes.
-- Slash command options with 4+ required fields create a cluttered command picker.
-- The channel wizard allows rich formatted instructions, validation feedback, and a review step before saving.
+- Discord modal dialogs are limited to 5 fields and expire after 3 minutes.
+- Slash command options with multiple required fields create a cluttered picker.
+- The channel wizard allows rich formatted instructions, inline validation, and a review-before-save step.
 
 ---
 
 ## Prerequisites
 
-- **Node.js 18+** (LTS recommended)
+- **Node.js 22.5 or later** — the bot uses the built-in `node:sqlite` module (no native compilation required)
 - A Discord account with permission to create applications
 - A Discord server where you have **Manage Server** permission
 
@@ -113,207 +153,266 @@ The `/setup` wizard uses Discord's **message collector** API. The bot sends an e
 
 1. Go to [https://discord.com/developers/applications](https://discord.com/developers/applications) and click **New Application**. Name it `ReferralBuddy`.
 
-2. Go to **Bot** → click **Add Bot**.
+2. Go to **Bot** → click **Reset Token** and copy your token.
 
 3. Under **Privileged Gateway Intents**, enable:
-   - ✅ **Server Members Intent** — required to detect joins/leaves
+   - ✅ **Server Members Intent** — required to detect joins, leaves, and role changes
    - ✅ **Message Content Intent** — required for the setup wizard's message collector
 
-4. Copy your **Bot Token** — you'll need it in `.env`.
-
-5. Go to **OAuth2 → URL Generator**. Select scopes:
+4. Go to **OAuth2 → URL Generator**. Select scopes:
    - `bot`
    - `applications.commands`
 
    Select bot permissions:
-   - `Manage Roles` (to assign reward roles)
-   - `Create Instant Invite` (to generate personal invite links)
+   - `Manage Roles` — to assign reward roles to Member A
+   - `Manage Guild` — **required** to fetch the invite list (without this, invite tracking does not work)
+   - `Create Instant Invite` — to generate personal referral links
    - `View Channels`
    - `Send Messages`
    - `Embed Links`
    - `Read Message History`
 
-6. Open the generated URL and add the bot to your server.
+5. Open the generated URL and add the bot to your server.
 
-7. Back in the portal, go to **General Information** and copy the **Application ID** — this is your `CLIENT_ID`.
+6. Go to **General Information** and copy the **Application ID** — this is your `CLIENT_ID`.
+
+> ⚠️ The bot's role must be positioned **above any reward roles** it needs to assign. Drag the ReferralBuddy role up in **Server Settings → Roles** after inviting the bot.
 
 ---
 
 ## Installation & First Run
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/yourorg/referralbuddy.git
+# 1. Clone or unzip the project
 cd referralbuddy
 
-# 2. Install dependencies
+# 2. Install dependencies (discord.js + dotenv only — no native modules)
 npm install
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env and set DISCORD_TOKEN, CLIENT_ID, and optionally GUILD_ID
+nano .env   # fill in DISCORD_TOKEN, CLIENT_ID, GUILD_ID
 
-# 4. Register slash commands with Discord
-#    Set GUILD_ID in .env for instant guild-scoped registration (recommended for setup)
-#    Leave GUILD_ID blank to register globally (takes ~1 hour to propagate)
+# 4. Register slash commands
+#    GUILD_ID set  → instant registration (use this during setup)
+#    GUILD_ID blank → global registration (up to 1 hour to propagate)
 npm run deploy
 
 # 5. Start the bot
 npm start
 ```
 
-You should see output like:
+Expected startup output:
 ```
   ✔  Command loaded: /setup
   ✔  Command loaded: /referral
   ✔  Command loaded: /stats
   ✔  Command loaded: /leaderboard
-  ✔  Command loaded: /level
+  ✔  Command loaded: /levelroles
+  ✔  Command loaded: /postpanel
   ✔  Command loaded: /admin
   ✔  Event registered: ready (once)
   ✔  Event registered: guildMemberAdd
+  ✔  Event registered: guildMemberUpdate
   ...
-[2024-01-15 12:00:00] ⚙️ Logged in as ReferralBuddy#1234 (123456789)
-[2024-01-15 12:00:00] 📥 Cached 42 invites  ↳ My Server
-[2024-01-15 12:00:00] ⚙️ ───── ReferralBuddy is ready ─────
+[2024-01-15 12:00:00] ⚙️  Logged in as ReferralBuddy#1234
+[2024-01-15 12:00:00] 📥  Cached 42 invites  ↳ My Server
+[2024-01-15 12:00:00] ⚙️  ───── ReferralBuddy is ready ─────
 ```
 
 ---
 
-## Bot Setup Wizard (`/setup`)
+## Setup Wizard (`/setup`)
 
-Run `/setup` in any channel where the bot can read and send messages. You must have **Manage Server** permission.
+Run `/setup` in any channel the bot can read and send messages in. Requires **Manage Server** permission.
 
-The wizard walks through 4 steps:
+The wizard walks through **5 steps**:
 
-| Step | Prompt | Example answer |
-|------|--------|----------------|
-| 1 | **Log Channel** — where should activity logs go? | `#bot-logs` or channel ID |
-| 2 | **Referral Channel** — where should the referral panel be posted? | `#referrals` |
-| 3 | **Reward Roles** — one per line as `<points> @RoleName` | `100 @Recruiter` or `skip` |
-| 4 | **Confirm** — review and save | `confirm` or `cancel` |
+| Step | What it asks | Format | Skip? |
+|------|-------------|--------|-------|
+| 1 | **Log Channel** — where to post activity logs | `#channel` or channel ID | No |
+| 2 | **Referral Channel** — where to post the referral panel | `#channel` or channel ID | No |
+| 3 | **Level Roles** — which levelling bot roles award points to the inviter | `<role_id or @mention> <points>` per line | Yes — type `skip` |
+| 4 | **Reward Roles** — which roles Member A earns at point thresholds | `<points> @RoleName` per line | Yes — type `skip` |
+| 5 | **Confirm** — review all settings and save | `confirm` or `cancel` | — |
 
-After confirmation the bot:
-- Saves the config to the database.
-- Posts the referral panel embed with a "Get My Referral Link" button in the referral channel.
-- Logs the setup event to the log channel.
+### Step 3 — Level Roles example input
 
-You can re-run `/setup` at any time to change channels or update reward roles.
+```
+123456789012345678 10
+987654321098765432 100
+```
+
+Or using role mentions (copy from Discord):
+
+```
+@Level 1 10
+@Level 10 100
+```
+
+Each line means: "when Friend B receives this role, award the inviter this many points."
+
+- Minimum: **0 roles** (type `skip`)
+- Maximum: **20 roles**
+- Points can be changed later with `/levelroles add` (remove then re-add the role)
+
+### Step 4 — Reward Roles example input
+
+```
+50   @Newcomer Recruiter
+250  @Active Recruiter
+1000 @Elite Recruiter
+```
+
+Each line means: "when Member A reaches this many total points, assign them this role."
+
+After confirming, the bot saves the config and automatically posts the referral panel embed in the referral channel.
 
 ---
 
 ## Commands Reference
 
-### `/referral`
-Get your personal referral invite link. The link is permanent and unique to you. Also accessible via the button in the referral panel.
+### Member commands
 
 ---
 
-### `/stats me [period] [from] [to]`
-View your own referral stats.
+#### `/referral`
+Get your personal referral invite link. The link is permanent and unique to you. Also accessible by clicking the button in the referral panel embed.
 
-### `/stats member <user> [period] [from] [to]`
-View stats for another member.
+---
 
-### `/stats server [period] [from] [to]`
-Server-wide top inviters, top earners, and totals.
+#### `/stats me [period] [from] [to]`
+View your own referral stats — total points, period points, total invites, and period invites.
+
+#### `/stats member <user> [period] [from] [to]`
+View the same stats for any other member.
+
+#### `/stats server [period] [from] [to]`
+Server-wide leaderboard — top inviters, top earners, total joins, and total points awarded for the period.
 
 **Period options:**
 
-| Value | Description |
-|-------|-------------|
-| `All Time` | From the beginning of time (default) |
+| Option | Coverage |
+|--------|----------|
+| `All Time` | Since the bot was set up (default) |
 | `Today` | Last 24 hours |
 | `This Week` | Last 7 days |
 | `This Month` | Last 30 days |
 | `Custom` | Specify `from` and `to` as `YYYY-MM-DD` |
 
-**Custom example:**
+Custom example:
 ```
 /stats me period:Custom from:2024-01-01 to:2024-01-31
 ```
 
 ---
 
-### `/leaderboard [period]`
-Quick top-10 leaderboard for inviters and earners. Supports the same period options as `/stats`.
+#### `/leaderboard [period]`
+Quick top-10 embed showing the best inviters and highest point earners for the selected period.
 
 ---
 
-### `/level <member> <level>` *(admin)*
-Manually trigger a level milestone for a member. Awards points to the member's inviter.
+### Admin commands
 
-- Level ≥ 1 → `+10 pts` to the inviter
-- Level ≥ 10 → `+100 pts` to the inviter
-
-Milestones are idempotent — running the same command twice for the same member/level does nothing the second time.
+All admin commands require **Manage Server** permission.
 
 ---
 
-### `/setup` *(admin)*
-Run the interactive setup wizard. See [Bot Setup Wizard](#bot-setup-wizard-setup).
+#### `/setup`
+Run the interactive 5-step setup wizard. Safe to re-run at any time — it overwrites the existing config on confirm.
 
 ---
 
-### `/admin points add <member> <amount> [reason]` *(admin)*
-Manually add points to a member.
+#### `/levelroles add <role> <points>`
+Add a level role to watch. When any member receives this role from your levelling bot, their inviter earns the specified points.
 
-### `/admin points remove <member> <amount> [reason]` *(admin)*
-Manually remove points from a member (capped at current total — no negatives).
+```
+/levelroles add role:@Level 1 points:10
+/levelroles add role:@Level 10 points:100
+```
 
-### `/admin points set <member> <amount> [reason]` *(admin)*
-Set a member's total to an exact value.
+- Up to **20 level roles** per server
+- `points` must be between 1 and 100,000
+- Adding a role that is already tracked returns an error — remove it first if you want to change the points
 
-### `/admin points history <member>` *(admin)*
-View the last 15 point transactions for a member, with timestamps.
+---
 
-### `/admin config` *(admin)*
-Display the current configuration (channels, reward roles).
+#### `/levelroles remove <role>`
+Stop tracking a level role. Existing milestone records are kept (so points already awarded won't be double-awarded if the role is re-added), but no new points will be awarded when members receive this role.
 
-### `/admin resetpanel` *(admin)*
-Re-post the referral panel in the configured referral channel (useful if it was accidentally deleted).
+---
+
+#### `/levelroles list`
+Display all currently tracked level roles with their point values and slot usage (e.g. `3/20 slots used`).
+
+---
+
+#### `/levelroles clear`
+Remove all tracked level roles at once.
+
+---
+
+#### `/postpanel [channel]`
+Re-post the referral panel embed with the "Get My Referral Link" button.
+
+- **No `channel` option** — posts to the configured referral channel
+- **With `channel` option** — posts to the specified channel and updates the config to use it going forward
+
+Useful when the original panel message was deleted or the channel was recreated.
+
+---
+
+#### `/admin points add <member> <amount> [reason]`
+Manually add points to a member. Logged to the points ledger with the reason.
+
+#### `/admin points remove <member> <amount> [reason]`
+Manually remove points. Capped at the member's current total — cannot go negative.
+
+#### `/admin points set <member> <amount> [reason]`
+Set a member's total to an exact value. The difference is recorded as a single ledger entry.
+
+#### `/admin points history <member>`
+View the last 15 point transactions for a member, with timestamps and reasons.
+
+#### `/admin config`
+Display the current server configuration — log channel, referral channel, level roles, and reward roles.
+
+#### `/admin resetpanel`
+Alias for reposting the referral panel (same as `/postpanel` with no options).
 
 ---
 
 ## Level Bot Integration
 
-ReferralBuddy ships with a `processMilestone()` function in `src/commands/level.js` that handles the full milestone-award logic. You can call it automatically whenever a levelling bot assigns a level role, removing the need to run `/level` manually.
+ReferralBuddy listens to `guildMemberUpdate` and checks every role addition against the level roles you've configured. **No code changes are needed** — the integration is entirely database-driven.
 
-### Example: MEE6 / Arcane level role watcher
+### How to set it up
 
-Add a `guildMemberUpdate` event listener (create `src/events/guildMemberUpdate.js`):
+1. In your levelling bot (MEE6, Arcane, Lurkr, etc.), configure it to assign a Discord role when a member hits a specific level.
+2. Copy the role IDs for those roles.
+3. Run `/levelroles add` for each one, specifying the points to award to the inviter.
 
-```js
-// src/events/guildMemberUpdate.js
-'use strict';
+That's it. From that point on, whenever any member receives one of those roles, ReferralBuddy automatically finds who invited them and awards the points.
 
-const { processMilestone } = require('../commands/level');
+### Example — MEE6 setup
 
-// Map role IDs → the level they represent
-// Fill these in from your levelling bot's configuration
-const LEVEL_ROLES = {
-  '111111111111111111': 1,   // "Level 1" role ID → level 1
-  '222222222222222222': 10,  // "Level 10" role ID → level 10
-};
+In MEE6 dashboard, create role rewards:
+- Level 1 → assigns role `Level 1` (ID: `111111111111111111`)
+- Level 10 → assigns role `Level 10` (ID: `222222222222222222`)
 
-module.exports = {
-  name: 'guildMemberUpdate',
-
-  async execute(oldMember, newMember) {
-    for (const [roleId, level] of Object.entries(LEVEL_ROLES)) {
-      const hadRole = oldMember.roles.cache.has(roleId);
-      const hasRole = newMember.roles.cache.has(roleId);
-
-      if (!hadRole && hasRole) {
-        // Member just received this level role
-        await processMilestone(newMember.guild, newMember.id, level);
-      }
-    }
-  },
-};
+Then in Discord:
+```
+/levelroles add role:@Level 1  points:10
+/levelroles add role:@Level 10 points:100
 ```
 
-This fires automatically whenever a member gains a new role, checks if it's a tracked level role, and awards points to the original inviter — completely hands-free.
+### Idempotency
+
+Each level role milestone is recorded in the `level_milestones` table keyed by `(guild_id, member_id, inviter_id, role_id)`. If the same role is removed and re-added to Friend B, or the event fires twice, the points are only awarded once.
+
+### Any number of milestones
+
+There is no hardcoded "Level 1" or "Level 10" concept. You can configure any roles as milestones — a server could have 15 different level roles each awarding different amounts to the inviter.
 
 ---
 
@@ -321,24 +420,19 @@ This fires automatically whenever a member gains a new role, checks if it's a tr
 
 ### Option 1: Bare Metal (Node + PM2)
 
-Best for: VPS/dedicated server without containers.
+Best for: VPS or dedicated server without containers.
 
 ```bash
-# Install PM2 globally
 npm install -g pm2
-
-# Start the bot
 pm2 start deploy/ecosystem.config.js
-
-# Save process list and generate startup script
 pm2 save
-pm2 startup   # follow the printed command to enable auto-start
+pm2 startup   # follow the printed instruction
 ```
 
-**Useful PM2 commands:**
+Useful commands:
 ```bash
-pm2 status               # see running processes
-pm2 logs referralbuddy   # stream logs
+pm2 status
+pm2 logs referralbuddy
 pm2 restart referralbuddy
 pm2 stop referralbuddy
 ```
@@ -348,10 +442,8 @@ pm2 stop referralbuddy
 ### Option 2: Docker
 
 ```bash
-# Build the image
 docker build -t referralbuddy:latest .
 
-# Run (database stored in a named volume)
 docker run -d \
   --name referralbuddy \
   --restart unless-stopped \
@@ -360,7 +452,6 @@ docker run -d \
   -v referralbuddy_data:/app/data \
   referralbuddy:latest
 
-# Logs
 docker logs -f referralbuddy
 ```
 
@@ -369,19 +460,13 @@ docker logs -f referralbuddy
 ### Option 3: Docker Compose
 
 ```bash
-# Copy and fill in .env
-cp .env.example .env
+cp .env.example .env   # fill in your values
 
-# Start (builds image automatically)
 docker compose up -d
-
-# Logs
 docker compose logs -f
-
-# Stop
 docker compose down
 
-# Update (after pulling new code)
+# After pulling updated code:
 docker compose build --no-cache && docker compose up -d
 ```
 
@@ -389,89 +474,73 @@ docker compose build --no-cache && docker compose up -d
 
 ### Option 4: Podman (Rootless)
 
-Uses the included shell script — no root required.
-
 ```bash
-# Make executable (already done in repo)
 chmod +x deploy/podman-run.sh
-
-# Build and run
 ./deploy/podman-run.sh
 ```
 
-The script will:
-1. Build the image with `podman build`.
-2. Stop/remove any existing container with the same name.
-3. Start a new rootless container with the database in `~/.local/share/referralbuddy/data`.
-4. Optionally generate a systemd user unit so it starts on login.
+The script builds the image, stops any existing container, starts a new rootless container with the database in `~/.local/share/referralbuddy/data`, and optionally generates a systemd user unit for auto-start on login.
 
 ---
 
 ### Option 5: Podman Quadlet (systemd-native)
 
-Quadlet is the modern way to manage containers as systemd units (Podman ≥ 4.4, Fedora 37+, RHEL 9+).
+Requires Podman ≥ 4.4 (Fedora 37+, RHEL 9+).
 
 ```bash
-# 1. Build the image first
+# Build image
 podman build -t localhost/referralbuddy:latest .
 
-# 2. Create the env file directory and copy your .env
+# Set up config and data directories
 mkdir -p ~/.config/referralbuddy
 cp .env ~/.config/referralbuddy/referralbuddy.env
-
-# 3. Create the data directory
 mkdir -p ~/.local/share/referralbuddy/data
 
-# 4. Install the Quadlet unit
+# Install Quadlet unit
 mkdir -p ~/.config/containers/systemd
 cp deploy/referralbuddy.container ~/.config/containers/systemd/
 
-# 5. Reload systemd and start
+# Start
 systemctl --user daemon-reload
-systemctl --user start referralbuddy
-systemctl --user enable referralbuddy   # start on login
+systemctl --user enable --now referralbuddy
 
 # Logs
 journalctl --user -u referralbuddy -f
 ```
 
-**Root / system-wide installation:**
+For root/system-wide:
 ```bash
 cp deploy/referralbuddy.container /etc/containers/systemd/
 # Edit the unit — replace %h with absolute paths
 systemctl daemon-reload
 systemctl enable --now referralbuddy
-journalctl -u referralbuddy -f
 ```
 
 ---
 
 ### Option 6: Systemd Service (no containers)
 
-For servers where you want Node running directly under systemd.
-
 ```bash
-# 1. Create a dedicated user
+# Create a dedicated system user
 sudo useradd -r -s /bin/false referralbuddy
 
-# 2. Clone/copy the project
+# Copy project files
 sudo mkdir -p /opt/referralbuddy
 sudo cp -r . /opt/referralbuddy/
 sudo chown -R referralbuddy:referralbuddy /opt/referralbuddy
 
-# 3. Install dependencies as the service user
+# Install dependencies
 sudo -u referralbuddy bash -c "cd /opt/referralbuddy && npm ci --omit=dev"
 
-# 4. Create the .env file
+# Create .env
 sudo cp /opt/referralbuddy/.env.example /opt/referralbuddy/.env
-sudo nano /opt/referralbuddy/.env   # fill in your values
+sudo nano /opt/referralbuddy/.env
 
-# 5. Install the service
+# Install and enable the service
 sudo cp deploy/referralbuddy.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now referralbuddy
 
-# Logs
 sudo journalctl -u referralbuddy -f
 ```
 
@@ -479,55 +548,62 @@ sudo journalctl -u referralbuddy -f
 
 ## Database Schema
 
-The SQLite database lives at the path configured in `DB_PATH` (default: `./data/referralbuddy.db`).
+SQLite database at `DB_PATH` (default: `./data/referralbuddy.db`). All timestamps are Unix seconds.
 
 | Table | Purpose |
 |-------|---------|
-| `guild_config` | One row per guild — log channel, referral channel, message ID |
-| `reward_roles` | Configurable point thresholds → Discord role mappings |
-| `invites` | Snapshot of every invite code seen (updated on every join) |
-| `referral_invites` | The personal invite created for each member |
-| `join_events` | Every join event with full attribution (joiner, inviter, code) |
-| `points_log` | **Immutable** ledger — every point transaction with timestamp |
-| `member_points` | Running totals cache for fast leaderboard queries |
-| `level_milestones` | Idempotency guard — prevents double-awarding level bonuses |
-
-All timestamps are stored as **Unix seconds** (integer). This makes range queries trivial and avoids timezone issues.
+| `guild_config` | One row per guild — log channel, referral channel, panel message ID |
+| `level_roles` | Roles that award points to the inviter when Friend B receives them. Each row has a `role_id` and `points` value. Replaces the old hardcoded level 1/10 system. |
+| `reward_roles` | Point thresholds that auto-assign roles to Member A |
+| `invites` | Snapshot of every invite code seen in the guild (use-count updated on every join) |
+| `referral_invites` | The personal invite link generated for each member |
+| `join_events` | Every join event with full attribution: joiner, inviter, invite code, timestamp |
+| `points_log` | **Immutable** points ledger — every transaction with reason, related member, and timestamp |
+| `member_points` | Running totals cache per member for fast leaderboard queries |
+| `level_milestones` | Idempotency guard — `(guild_id, member_id, inviter_id, role_id)` primary key prevents double-awarding |
 
 ---
 
 ## Troubleshooting
 
-**"Unknown Invite" on join — invites not being detected**
-- Make sure the bot has the `Manage Guild` or `Manage Channels` permission (required to fetch invites).
-- If your server has Community features enabled, vanity URL joins will always appear as "Unknown" since vanity URLs are not in the standard invite list.
-- The bot must be online before the invite is created for it to be in the cache.
+**Invites show as "Unknown / Organic" on every join**
+- The bot needs `Manage Guild` permission to call `guild.invites.fetch()`. Without it invite tracking is completely broken.
+- The bot must have been online when the invite was created. Invites created while the bot was offline won't be in the cache until the next restart.
+- Vanity URL joins (`discord.gg/yourserver`) always appear as Unknown — Discord does not expose vanity URL usage in the invite API.
 
-**Bot doesn't respond to slash commands**
-- Run `npm run deploy` again to register commands.
-- If using `GUILD_ID`, make sure it matches the server you're testing in.
-- Without `GUILD_ID` (global commands), it can take up to 1 hour for commands to appear.
+**Level role points are not being awarded**
+- Confirm the role is tracked: `/levelroles list`
+- Make sure the bot has `Server Members Intent` enabled in the Developer Portal under Privileged Gateway Intents.
+- The `guildMemberUpdate` event only fires if the bot can see the member — ensure it has View Channels access.
+- Check the log channel for any error embeds.
 
-**"Missing Access" or "Missing Permissions" errors in logs**
-- The bot's role must be above any roles it's trying to assign (reward roles). Drag the `ReferralBuddy` role above your reward roles in Server Settings → Roles.
+**Slash commands don't appear**
+- Run `npm run deploy` to register them.
+- With `GUILD_ID` set: commands appear instantly.
+- Without `GUILD_ID` (global): can take up to 1 hour.
+- After adding new commands (like `/levelroles`, `/postpanel`) you must re-run `npm run deploy`.
 
-**Setup wizard times out immediately**
-- You have **5 minutes** to type each response. Make sure you're typing in the **same channel** where you ran `/setup`.
-- Only the user who ran `/setup` can respond to the wizard.
+**Reward roles not being assigned**
+- The bot's role must be **above** the reward role in the role hierarchy. Go to Server Settings → Roles and drag ReferralBuddy above any roles it should assign.
 
-**Level milestones not awarding points automatically**
-- The `/level` command is manual by default. See [Level Bot Integration](#level-bot-integration) to wire up automatic detection.
+**Setup wizard times out**
+- You have 5 minutes per step. Type your response in the **same channel** where you ran `/setup`.
+- Only the user who ran `/setup` can respond.
 
-**Database locked / WAL errors**
-- Ensure only one bot instance is running at a time. The SQLite WAL mode handles concurrent reads but not multiple writers.
+**Referral panel button stopped working**
+- The panel message may have been deleted. Run `/postpanel` to re-post it.
+
+**Database errors on startup**
+- Ensure only one instance of the bot is running. SQLite WAL mode supports concurrent reads but only a single writer.
+- Check that the `data/` directory is writable by the process user.
 
 ---
 
 ## Security Notes
 
-- **Never commit `.env`** — it's in `.gitignore`. Use secrets management (GitHub Secrets, Vault, etc.) in CI/CD.
-- The bot uses a **non-root user** inside the Docker/Podman image.
+- **Never commit `.env`** — it is in `.gitignore`. Use environment secrets in CI/CD (GitHub Actions secrets, Vault, etc.).
+- The Docker/Podman image runs as a **non-root user**.
 - The Podman Quadlet unit sets `NoNewPrivileges=true` and `ReadOnlyRootfs=true`.
 - The systemd unit sets `PrivateTmp=yes` and `ProtectSystem=strict`.
-- Only users with **Manage Server** permission can run `/setup`, `/level`, and `/admin`.
-- The bot's role should be granted **only the permissions listed** in the invite URL above — do not use Administrator.
+- Only members with **Manage Server** permission can run `/setup`, `/levelroles`, `/postpanel`, and `/admin`.
+- Grant the bot only the permissions listed above — **do not use Administrator**.

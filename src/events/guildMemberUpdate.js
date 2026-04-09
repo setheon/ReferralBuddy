@@ -1,61 +1,76 @@
 // src/events/guildMemberUpdate.js
-// ReferralBuddy — Automatic level milestone detection
+// ReferralBuddy — Watch for level roles being assigned to Friend B.
 //
-// This event fires whenever a guild member's roles change. If a levelling bot
-// (MEE6, Arcane, Lurkr, etc.) assigns a role when a member hits level 1 or
-// level 10, configure those role IDs below and this handler will automatically
-// award the referral milestone points to the inviter.
-//
-// ── Configuration ────────────────────────────────────────────────────────────
-// Set LEVEL_1_ROLE_ID and LEVEL_10_ROLE_ID in your .env file.
-// If you don't use a levelling bot, leave them blank and use /level manually.
-// ─────────────────────────────────────────────────────────────────────────────
+// When a levelling bot (MEE6, Arcane, Lurkr, etc.) assigns a role to Friend B
+// that is configured as a "level role" in ReferralBuddy, we:
+//   1. Find who originally invited Friend B (Member A).
+//   2. Check this milestone hasn't already been rewarded (idempotency).
+//   3. Award Member A the configured points.
+//   4. Log everything to the guild's log channel.
 
 'use strict';
 
-const { processMilestone } = require('../commands/level');
-const { logToChannel }     = require('../utils/logger');
+const db               = require('../utils/database');
+const { awardPoints }  = require('../utils/points');
+const { logToChannel } = require('../utils/logger');
 
 module.exports = {
   name: 'guildMemberUpdate',
 
   async execute(oldMember, newMember) {
     // Only care about role additions
-    const addedRoles = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id));
-    if (!addedRoles.size) return;
+    const addedRoleIds = [...newMember.roles.cache.keys()]
+      .filter(id => !oldMember.roles.cache.has(id));
 
-    const level1RoleId  = process.env.LEVEL_1_ROLE_ID  ?? null;
-    const level10RoleId = process.env.LEVEL_10_ROLE_ID ?? null;
+    if (!addedRoleIds.length) return;
 
-    // No level roles configured — nothing to do
-    if (!level1RoleId && !level10RoleId) return;
+    const guildId = newMember.guild.id;
 
-    for (const [roleId] of addedRoles) {
-      let targetLevel = null;
+    for (const roleId of addedRoleIds) {
+      // Is this a tracked level role?
+      const levelRole = db.getLevelRoleByRoleId(guildId, roleId);
+      if (!levelRole) continue;
 
-      if (level10RoleId && roleId === level10RoleId) targetLevel = 10;
-      else if (level1RoleId  && roleId === level1RoleId)  targetLevel = 1;
-
-      if (!targetLevel) continue;
-
-      const result = await processMilestone(newMember.guild, newMember.id, targetLevel);
-
-      if (result.ok) {
+      // Find who invited Friend B
+      const joinEvent = db.getInviterForMember(guildId, newMember.id);
+      if (!joinEvent?.inviter_id) {
         await logToChannel(
-          newMember.guild,
-          'level',
-          `Level ${targetLevel} Milestone Detected`,
-          `<@${newMember.id}> was assigned <@&${roleId}> — milestone points awarded automatically.`,
-          [
-            { name: '👤 Member',   value: `<@${newMember.id}>`,      inline: true },
-            { name: '🎯 Level',    value: String(targetLevel),        inline: true },
-            { name: '⭐ Points',   value: `+${result.points}`,        inline: true },
-            { name: '📨 Inviter',  value: `<@${result.inviterId}>`,   inline: true },
-          ]
+          newMember.guild, 'info',
+          'Level Role — No Inviter Found',
+          `<@${newMember.id}> received <@&${roleId}> (${levelRole.role_name}, +${levelRole.points} pts) but has no invite record — joined organically or before the bot was set up.`
         );
+        continue;
       }
-      // Non-ok results (already rewarded, no inviter, etc.) are silently ignored
-      // to avoid spam — the awardPoints logger already captures successful awards.
+
+      const inviterId  = joinEvent.inviter_id;
+      // Use role_id as the milestone key so each role can only reward once per referral
+      const milestone  = roleId;
+
+      // Idempotency — don't award twice for the same role on the same member
+      if (db.hasMilestone(guildId, newMember.id, inviterId, milestone)) continue;
+
+      db.recordMilestone(guildId, newMember.id, inviterId, milestone);
+
+      await awardPoints(
+        newMember.guild,
+        inviterId,
+        levelRole.points,
+        `Level role — <@${newMember.id}> received **${levelRole.role_name}**`,
+        newMember.id
+      );
+
+      await logToChannel(
+        newMember.guild,
+        'level',
+        'Level Role Milestone',
+        `<@${newMember.id}> received <@&${roleId}> — <@${inviterId}> earned **+${levelRole.points} pts**`,
+        [
+          { name: '👤 Member (B)',  value: `<@${newMember.id}>`,  inline: true },
+          { name: '🎯 Role',        value: `<@&${roleId}>`,        inline: true },
+          { name: '⭐ Points to A', value: `+${levelRole.points}`, inline: true },
+          { name: '📨 Inviter (A)', value: `<@${inviterId}>`,      inline: true },
+        ]
+      );
     }
   },
 };

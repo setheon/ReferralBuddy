@@ -53,13 +53,24 @@ function _initSchema() {
       configured_at         INTEGER DEFAULT (strftime('%s','now'))
     );
 
-    -- Reward roles: assign a Discord role when a member passes a points threshold
+    -- Reward roles: roles Member A earns when their points hit a threshold
     CREATE TABLE IF NOT EXISTS reward_roles (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       guild_id         TEXT    NOT NULL,
       role_id          TEXT    NOT NULL,
       role_name        TEXT    NOT NULL,
       points_required  INTEGER NOT NULL,
+      UNIQUE(guild_id, role_id)
+    );
+
+    -- Level roles: when Friend B gets one of these roles (managed by a levelling bot),
+    -- their inviter (Member A) earns the configured points. Supports 0-20 per guild.
+    CREATE TABLE IF NOT EXISTS level_roles (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id    TEXT    NOT NULL,
+      role_id     TEXT    NOT NULL,
+      role_name   TEXT    NOT NULL,
+      points      INTEGER NOT NULL,
       UNIQUE(guild_id, role_id)
     );
 
@@ -320,6 +331,32 @@ function recordMilestone(guildId, memberId, inviterId, milestone) {
   `).run(guildId, memberId, inviterId, milestone);
 }
 
+// ─── Level roles (Friend B gets role → Member A earns points) ────────────────
+
+function getLevelRoles(guildId) {
+  return _stmt('SELECT * FROM level_roles WHERE guild_id = ? ORDER BY points DESC').all(guildId);
+}
+
+function setLevelRoles(guildId, roles) {
+  const db = getDb();
+  db.exec('BEGIN');
+  try {
+    _stmt('DELETE FROM level_roles WHERE guild_id = ?').run(guildId);
+    for (const r of roles) {
+      _stmt('INSERT INTO level_roles (guild_id, role_id, role_name, points) VALUES (?, ?, ?, ?)')
+        .run(guildId, r.roleId, r.roleName, r.points);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+function getLevelRoleByRoleId(guildId, roleId) {
+  return _stmt('SELECT * FROM level_roles WHERE guild_id = ? AND role_id = ?').get(guildId, roleId);
+}
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -342,4 +379,6 @@ module.exports = {
   getGuildStats,
   // Milestones
   hasMilestone, recordMilestone,
+  // Level roles
+  getLevelRoles, setLevelRoles, getLevelRoleByRoleId,
 };
