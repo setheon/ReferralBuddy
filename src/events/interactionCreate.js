@@ -1,10 +1,7 @@
-// src/events/interactionCreate.js
-// ReferralBuddy — Route slash commands and button interactions
-
 'use strict';
 
-const { logToChannel } = require('../utils/logger');
-const { errorEmbed }   = require('../utils/embeds');
+const { log }                 = require('../utils/logger');
+const { handleReferralButton } = require('../utils/referralButton');
 
 module.exports = {
   name: 'interactionCreate',
@@ -16,24 +13,16 @@ module.exports = {
       const cmd = client.commands.get(interaction.commandName);
 
       if (!cmd) {
-        return interaction.reply({ embeds: [errorEmbed('Unknown command.')], ephemeral: true });
+        return interaction.reply({ content: '❌ Unknown command.', flags: 1 << 6 });
       }
 
       try {
         await cmd.execute(interaction, client);
       } catch (err) {
         console.error(`[CMD ERROR] /${interaction.commandName}:`, err);
+        await log(client, 'error', `Command Error: \`/${interaction.commandName}\` — ${err.message}`);
 
-        if (interaction.guild) {
-          await logToChannel(
-            interaction.guild,
-            'error',
-            `Command Error: /${interaction.commandName}`,
-            err.message
-          );
-        }
-
-        const payload = { embeds: [errorEmbed('Something went wrong. Please try again.')], ephemeral: true };
+        const payload = { content: '❌ Something went wrong. Please try again.', flags: 1 << 6 };
         if (interaction.deferred || interaction.replied) {
           await interaction.followUp(payload).catch(() => {});
         } else {
@@ -47,14 +36,12 @@ module.exports = {
     // ── Button interactions ───────────────────────────────────────────────────
     if (interaction.isButton()) {
       if (interaction.customId === 'referral_get_link') {
-        const referralCmd = client.commands.get('referral');
-        if (referralCmd?.handleButton) {
-          try {
-            await referralCmd.handleButton(interaction);
-          } catch (err) {
-            console.error('[BUTTON ERROR] referral_get_link:', err);
-            await interaction.reply({ embeds: [errorEmbed('Could not create your link. Please try again.')], ephemeral: true }).catch(() => {});
-          }
+        try {
+          await handleReferralButton(interaction, client);
+        } catch (err) {
+          console.error('[BUTTON ERROR] referral_get_link:', err);
+          await log(client, 'error', `Referral button error for \`${interaction.user.id}\`: ${err.message}`);
+          await interaction.reply({ content: '❌ Could not create your link. Please try again.', flags: 1 << 6 }).catch(() => {});
         }
       }
     }

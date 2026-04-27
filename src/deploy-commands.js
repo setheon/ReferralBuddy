@@ -1,7 +1,3 @@
-// src/deploy-commands.js
-// ReferralBuddy — Register slash commands with Discord's API
-// Run:  node src/deploy-commands.js
-
 'use strict';
 
 require('dotenv').config();
@@ -10,16 +6,15 @@ const { REST, Routes } = require('discord.js');
 const path = require('path');
 const fs   = require('fs');
 
-const TOKEN     = process.env.DISCORD_TOKEN;
+const TOKEN     = process.env.BOT_TOKEN || process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID  = process.env.GUILD_ID;  // optional — omit for global deploy
+const GUILD_ID  = process.env.GUILD_ID;
 
 if (!TOKEN || !CLIENT_ID) {
-  console.error('❌  DISCORD_TOKEN and CLIENT_ID must be set in .env');
+  console.error('❌  BOT_TOKEN and CLIENT_ID must be set in .env');
   process.exit(1);
 }
 
-// Load all command files
 const commandsDir = path.join(__dirname, 'commands');
 const commandData = [];
 
@@ -37,22 +32,12 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
   try {
     console.log(`\n🚀  Deploying ${commandData.length} command(s)…`);
 
-    let data;
-    if (GUILD_ID) {
-      // Guild-scoped: instant registration (great for development)
-      data = await rest.put(
-        Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-        { body: commandData }
-      );
-      console.log(`✅  Registered ${data.length} guild command(s) in guild ${GUILD_ID}`);
-    } else {
-      // Global: can take up to 1 hour to propagate across all guilds
-      data = await rest.put(
-        Routes.applicationCommands(CLIENT_ID),
-        { body: commandData }
-      );
-      console.log(`✅  Registered ${data.length} global command(s)`);
-    }
+    const route = GUILD_ID
+      ? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
+      : Routes.applicationCommands(CLIENT_ID);
+
+    const data = await rest.put(route, { body: commandData });
+    console.log(`✅  Registered ${data.length} command(s)${GUILD_ID ? ` in guild ${GUILD_ID}` : ' globally'}.`);
   } catch (err) {
     console.error('❌  Deploy failed:', err);
   }

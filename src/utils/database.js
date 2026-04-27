@@ -1,360 +1,266 @@
-// src/utils/database.js
-// ReferralBuddy — SQLite database layer
-// Uses the built-in `node:sqlite` module (Node.js 22.5+) — zero npm dependencies.
-// API is fully synchronous, identical surface to the previous better-sqlite3 layer.
-
 'use strict';
 
-const { DatabaseSync } = require('node:sqlite');
-const path             = require('path');
-const fs               = require('fs');
-
-let _db = null;
+const Database = require('better-sqlite3');
+const path     = require('path');
+const fs       = require('fs');
 
 // ─── Connection ───────────────────────────────────────────────────────────────
+
+let _db = null;
 
 function getDb() {
   if (_db) return _db;
 
-  const dbPath = process.env.DB_PATH || './data/referralbuddy.db';
-  const dir    = path.dirname(path.resolve(dbPath));
+  const dbPath = process.env.DB_PATH || path.join(process.cwd(), 'data', 'referralbuddy.db');
+  const dir    = path.dirname(dbPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  _db = new DatabaseSync(dbPath);
-  _db.exec('PRAGMA journal_mode = WAL');
-  _db.exec('PRAGMA foreign_keys  = ON');
+  _db = new Database(dbPath);
+  _db.pragma('journal_mode = WAL');
+  _db.pragma('foreign_keys = ON');
   _initSchema();
   return _db;
-}
-
-// ─── Thin prepared-statement wrapper ─────────────────────────────────────────
-// node:sqlite's prepared statements work slightly differently from better-sqlite3.
-// We wrap them to provide the same .get() / .all() / .run() interface.
-
-function _stmt(sql) {
-  const s = getDb().prepare(sql);
-  return {
-    get:  (...args) => s.get(...args)  ?? null,
-    all:  (...args) => s.all(...args),
-    run:  (...args) => s.run(...args),
-  };
 }
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
 function _initSchema() {
   getDb().exec(`
-    -- Per-guild configuration
-    CREATE TABLE IF NOT EXISTS guild_config (
-      guild_id              TEXT PRIMARY KEY,
-      log_channel_id        TEXT,
-      referral_channel_id   TEXT,
-      referral_message_id   TEXT,
-      configured_at         INTEGER DEFAULT (strftime('%s','now'))
+    CREATE TABLE IF NOT EXISTS bot_config (
+      key   TEXT PRIMARY KEY,
+      value TEXT
     );
 
-    -- Reward roles: roles Member A earns when their points hit a threshold
-    CREATE TABLE IF NOT EXISTS reward_roles (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id         TEXT    NOT NULL,
-      role_id          TEXT    NOT NULL,
-      role_name        TEXT    NOT NULL,
-      points_required  INTEGER NOT NULL,
-      UNIQUE(guild_id, role_id)
+    CREATE TABLE IF NOT EXISTS invite_codes (
+      code           TEXT PRIMARY KEY,
+      created_by_id  TEXT,
+      created_by_bot INTEGER NOT NULL DEFAULT 0,
+      added_at       TEXT    NOT NULL DEFAULT (datetime('now'))
     );
 
-    -- Level roles: when Friend B gets one of these roles (managed by a levelling bot),
-    -- their inviter (Member A) earns the configured points. Supports 0-20 per guild.
-    CREATE TABLE IF NOT EXISTS level_roles (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id    TEXT    NOT NULL,
-      role_id     TEXT    NOT NULL,
-      role_name   TEXT    NOT NULL,
-      points      INTEGER NOT NULL,
-      UNIQUE(guild_id, role_id)
+    CREATE TABLE IF NOT EXISTS referral_points (
+      user_id TEXT PRIMARY KEY,
+      points  INTEGER NOT NULL DEFAULT 0
     );
 
-    -- Snapshot of every invite code seen in a guild
-    CREATE TABLE IF NOT EXISTS invites (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id     TEXT    NOT NULL,
-      invite_code  TEXT    NOT NULL,
-      inviter_id   TEXT,
-      uses         INTEGER DEFAULT 0,
-      max_uses     INTEGER DEFAULT 0,
-      created_at   INTEGER DEFAULT (strftime('%s','now')),
-      UNIQUE(guild_id, invite_code)
+    CREATE TABLE IF NOT EXISTS guild_members (
+      user_id     TEXT PRIMARY KEY,
+      joined      INTEGER NOT NULL DEFAULT 0,
+      has_left    INTEGER NOT NULL DEFAULT 0,
+      referrer_id TEXT
     );
 
-    -- One personal referral invite per member per guild
-    CREATE TABLE IF NOT EXISTS referral_invites (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id     TEXT NOT NULL,
-      member_id    TEXT NOT NULL,
-      invite_code  TEXT NOT NULL,
-      invite_url   TEXT NOT NULL,
-      created_at   INTEGER DEFAULT (strftime('%s','now')),
-      UNIQUE(guild_id, member_id)
+    CREATE TABLE IF NOT EXISTS left_members (
+      user_id TEXT PRIMARY KEY,
+      left_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    -- Every join event with attribution
-    CREATE TABLE IF NOT EXISTS join_events (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id     TEXT NOT NULL,
-      joiner_id    TEXT NOT NULL,
-      joiner_tag   TEXT,
-      inviter_id   TEXT,
-      invite_code  TEXT,
-      joined_at    INTEGER DEFAULT (strftime('%s','now'))
+    CREATE TABLE IF NOT EXISTS role_point_rewards (
+      role_id       TEXT PRIMARY KEY,
+      points_awarded INTEGER NOT NULL
     );
 
-    -- Immutable points ledger — never update rows, only insert
-    CREATE TABLE IF NOT EXISTS points_log (
-      id                INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id          TEXT    NOT NULL,
-      member_id         TEXT    NOT NULL,
-      points            INTEGER NOT NULL,
-      reason            TEXT    NOT NULL,
-      related_member_id TEXT,
-      earned_at         INTEGER DEFAULT (strftime('%s','now'))
+    CREATE TABLE IF NOT EXISTS role_reward_log (
+      user_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      PRIMARY KEY (user_id, role_id)
     );
 
-    -- Running totals cache (derived from points_log, kept in sync via triggers)
-    CREATE TABLE IF NOT EXISTS member_points (
-      guild_id      TEXT NOT NULL,
-      member_id     TEXT NOT NULL,
-      total_points  INTEGER DEFAULT 0,
-      PRIMARY KEY (guild_id, member_id)
+    CREATE TABLE IF NOT EXISTS referral_button_cooldowns (
+      user_id   TEXT PRIMARY KEY,
+      last_used TEXT NOT NULL
     );
 
-    -- Prevent double-awarding level milestones
-    CREATE TABLE IF NOT EXISTS level_milestones (
-      guild_id     TEXT    NOT NULL,
-      member_id    TEXT    NOT NULL,
-      inviter_id   TEXT    NOT NULL,
-      milestone    INTEGER NOT NULL,
-      rewarded_at  INTEGER DEFAULT (strftime('%s','now')),
-      PRIMARY KEY (guild_id, member_id, milestone)
+    CREATE TABLE IF NOT EXISTS db_backup_log (
+      backup_at TEXT NOT NULL,
+      filename  TEXT NOT NULL
     );
   `);
 }
 
-// ─── Guild config ─────────────────────────────────────────────────────────────
+// ─── Bot config ───────────────────────────────────────────────────────────────
 
-function getConfig(guildId) {
-  return _stmt('SELECT * FROM guild_config WHERE guild_id = ?').get(guildId);
+function getConfig(key) {
+  return getDb().prepare('SELECT value FROM bot_config WHERE key = ?').get(key)?.value ?? null;
 }
 
-function setConfig(guildId, data) {
-  const cur = getConfig(guildId);
-  if (cur) {
-    const sets = Object.keys(data).map(k => `${k} = ?`).join(', ');
-    _stmt(`UPDATE guild_config SET ${sets} WHERE guild_id = ?`)
-      .run(...Object.values(data), guildId);
-  } else {
-    const cols = ['guild_id', ...Object.keys(data)].join(', ');
-    const vals = Array(Object.keys(data).length + 1).fill('?').join(', ');
-    _stmt(`INSERT INTO guild_config (${cols}) VALUES (${vals})`)
-      .run(guildId, ...Object.values(data));
-  }
+function setConfig(key, value) {
+  getDb().prepare('INSERT OR REPLACE INTO bot_config (key, value) VALUES (?, ?)').run(key, value);
 }
 
-// ─── Reward roles ─────────────────────────────────────────────────────────────
+// ─── getReferrer — single source of truth ────────────────────────────────────
 
-function getRewardRoles(guildId) {
-  return _stmt('SELECT * FROM reward_roles WHERE guild_id = ? ORDER BY points_required ASC').all(guildId);
+/**
+ * Returns the referrer_id for a given userId, or null if none on record.
+ * Every feature that needs referral attribution must call this.
+ */
+function getReferrer(userId) {
+  const row = getDb().prepare('SELECT referrer_id FROM guild_members WHERE user_id = ?').get(userId);
+  return row?.referrer_id ?? null;
 }
 
-function setRewardRoles(guildId, roles) {
-  const db = getDb();
-  db.exec('BEGIN');
-  try {
-    _stmt('DELETE FROM reward_roles WHERE guild_id = ?').run(guildId);
-    for (const r of roles) {
-      _stmt('INSERT INTO reward_roles (guild_id, role_id, role_name, points_required) VALUES (?, ?, ?, ?)')
-        .run(guildId, r.roleId, r.roleName, r.pointsRequired);
-    }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-}
+// ─── Invite codes ─────────────────────────────────────────────────────────────
 
-// ─── Invite snapshots ─────────────────────────────────────────────────────────
-
-function upsertInvite(guildId, code, inviterId, uses, maxUses) {
-  _stmt(`
-    INSERT INTO invites (guild_id, invite_code, inviter_id, uses, max_uses)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(guild_id, invite_code)
-    DO UPDATE SET uses = excluded.uses, inviter_id = COALESCE(excluded.inviter_id, inviter_id)
-  `).run(guildId, code, inviterId ?? null, uses ?? 0, maxUses ?? 0);
-}
-
-function getInvites(guildId) {
-  return _stmt('SELECT * FROM invites WHERE guild_id = ?').all(guildId);
-}
-
-// ─── Referral invites ─────────────────────────────────────────────────────────
-
-function getReferralInvite(guildId, memberId) {
-  return _stmt('SELECT * FROM referral_invites WHERE guild_id = ? AND member_id = ?').get(guildId, memberId);
-}
-
-function saveReferralInvite(guildId, memberId, code, url) {
-  _stmt(`
-    INSERT INTO referral_invites (guild_id, member_id, invite_code, invite_url)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(guild_id, member_id)
-    DO UPDATE SET invite_code = excluded.invite_code, invite_url = excluded.invite_url
-  `).run(guildId, memberId, code, url);
-}
-
-function getAllReferralCodes(guildId) {
-  return _stmt('SELECT * FROM referral_invites WHERE guild_id = ?').all(guildId);
-}
-
-// ─── Join events ──────────────────────────────────────────────────────────────
-
-function recordJoin(guildId, joinerId, joinerTag, inviterId, inviteCode) {
-  _stmt(`
-    INSERT INTO join_events (guild_id, joiner_id, joiner_tag, inviter_id, invite_code)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(guildId, joinerId, joinerTag ?? null, inviterId ?? null, inviteCode ?? null);
-}
-
-function getInviterForMember(guildId, joinerId) {
-  return _stmt(`
-    SELECT * FROM join_events
-    WHERE guild_id = ? AND joiner_id = ?
-    ORDER BY joined_at DESC LIMIT 1
-  `).get(guildId, joinerId);
-}
-
-// ─── Points ledger ────────────────────────────────────────────────────────────
-
-function addPoints(guildId, memberId, points, reason, relatedMemberId = null) {
-  _stmt(`
-    INSERT INTO points_log (guild_id, member_id, points, reason, related_member_id)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(guildId, memberId, points, reason, relatedMemberId);
-
-  _stmt(`
-    INSERT INTO member_points (guild_id, member_id, total_points)
+function upsertInviteCode(code, createdById, createdByBot) {
+  getDb().prepare(`
+    INSERT INTO invite_codes (code, created_by_id, created_by_bot)
     VALUES (?, ?, ?)
-    ON CONFLICT(guild_id, member_id)
-    DO UPDATE SET total_points = total_points + excluded.total_points
-  `).run(guildId, memberId, points);
+    ON CONFLICT(code) DO UPDATE SET
+      created_by_id  = excluded.created_by_id,
+      created_by_bot = excluded.created_by_bot
+  `).run(code, createdById ?? null, createdByBot ? 1 : 0);
 }
 
-function getMemberPoints(guildId, memberId) {
-  const row = _stmt('SELECT total_points FROM member_points WHERE guild_id = ? AND member_id = ?').get(guildId, memberId);
-  return row ? row.total_points : 0;
+function getInviteCode(code) {
+  return getDb().prepare('SELECT * FROM invite_codes WHERE code = ?').get(code) ?? null;
 }
 
-function getPointsInRange(guildId, memberId, fromTs, toTs) {
-  const row = _stmt(`
-    SELECT COALESCE(SUM(points), 0) AS total
-    FROM points_log
-    WHERE guild_id = ? AND member_id = ? AND earned_at BETWEEN ? AND ?
-  `).get(guildId, memberId, fromTs, toTs);
-  return row ? row.total : 0;
+function getInviteCodesByUser(userId) {
+  return getDb().prepare('SELECT * FROM invite_codes WHERE created_by_id = ?').all(userId);
 }
 
-function getPointsLog(guildId, memberId, limit = 20) {
-  return _stmt(`
-    SELECT * FROM points_log
-    WHERE guild_id = ? AND member_id = ?
-    ORDER BY earned_at DESC LIMIT ?
-  `).all(guildId, memberId, limit);
+// ─── Referral points ──────────────────────────────────────────────────────────
+
+function getPoints(userId) {
+  return getDb().prepare('SELECT points FROM referral_points WHERE user_id = ?').get(userId)?.points ?? 0;
 }
 
-// ─── Invite counts ────────────────────────────────────────────────────────────
-
-function getInviteCount(guildId, memberId) {
-  const row = _stmt(`
-    SELECT COUNT(*) AS cnt FROM join_events WHERE guild_id = ? AND inviter_id = ?
-  `).get(guildId, memberId);
-  return row ? row.cnt : 0;
+function addPoints(userId, delta) {
+  getDb().prepare(`
+    INSERT INTO referral_points (user_id, points) VALUES (?, MAX(0, ?))
+    ON CONFLICT(user_id) DO UPDATE SET points = MAX(0, points + ?)
+  `).run(userId, Math.max(0, delta), delta);
+  return getPoints(userId);
 }
 
-function getInviteCountInRange(guildId, memberId, fromTs, toTs) {
-  const row = _stmt(`
-    SELECT COUNT(*) AS cnt FROM join_events
-    WHERE guild_id = ? AND inviter_id = ? AND joined_at BETWEEN ? AND ?
-  `).get(guildId, memberId, fromTs, toTs);
-  return row ? row.cnt : 0;
+function setPoints(userId, value) {
+  const clamped = Math.max(0, value);
+  getDb().prepare(`
+    INSERT INTO referral_points (user_id, points) VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET points = ?
+  `).run(userId, clamped, clamped);
+  return clamped;
 }
 
-// ─── Server-wide stats ────────────────────────────────────────────────────────
-
-function getGuildStats(guildId, fromTs, toTs) {
-  const topInviters = _stmt(`
-    SELECT inviter_id, COUNT(*) AS cnt
-    FROM join_events
-    WHERE guild_id = ? AND inviter_id IS NOT NULL AND joined_at BETWEEN ? AND ?
-    GROUP BY inviter_id ORDER BY cnt DESC LIMIT 10
-  `).all(guildId, fromTs, toTs);
-
-  const topEarners = _stmt(`
-    SELECT member_id, COALESCE(SUM(points), 0) AS total
-    FROM points_log
-    WHERE guild_id = ? AND earned_at BETWEEN ? AND ?
-    GROUP BY member_id ORDER BY total DESC LIMIT 10
-  `).all(guildId, fromTs, toTs);
-
-  const totalJoins  = _stmt(`SELECT COUNT(*) AS cnt FROM join_events WHERE guild_id = ? AND joined_at BETWEEN ? AND ?`).get(guildId, fromTs, toTs);
-  const totalPoints = _stmt(`SELECT COALESCE(SUM(points), 0) AS total FROM points_log WHERE guild_id = ? AND earned_at BETWEEN ? AND ?`).get(guildId, fromTs, toTs);
-
-  return {
-    topInviters,
-    topEarners,
-    totalJoins:  totalJoins?.cnt   ?? 0,
-    totalPoints: totalPoints?.total ?? 0,
-  };
+function getLeaderboard(limit = 10) {
+  return getDb().prepare('SELECT user_id, points FROM referral_points ORDER BY points DESC LIMIT ?').all(limit);
 }
 
-// ─── Level milestones ─────────────────────────────────────────────────────────
+// ─── Guild members ────────────────────────────────────────────────────────────
 
-function hasMilestone(guildId, memberId, inviterId, milestone) {
-  return !!_stmt(`
-    SELECT 1 FROM level_milestones
-    WHERE guild_id = ? AND member_id = ? AND inviter_id = ? AND milestone = ?
-  `).get(guildId, memberId, inviterId, milestone);
+function getMember(userId) {
+  return getDb().prepare('SELECT * FROM guild_members WHERE user_id = ?').get(userId) ?? null;
 }
 
-function recordMilestone(guildId, memberId, inviterId, milestone) {
-  _stmt(`
-    INSERT OR IGNORE INTO level_milestones (guild_id, member_id, inviter_id, milestone)
-    VALUES (?, ?, ?, ?)
-  `).run(guildId, memberId, inviterId, milestone);
-}
+/**
+ * Upsert a member record. Never overwrites existing joined, has_left, or referrer_id
+ * unless explicitly passed as non-null values.
+ */
+function upsertMember(userId, { joined, has_left, referrer_id } = {}) {
+  const existing = getMember(userId);
+  if (!existing) {
+    getDb().prepare(`
+      INSERT INTO guild_members (user_id, joined, has_left, referrer_id)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      userId,
+      joined    ?? 0,
+      has_left  ?? 0,
+      referrer_id ?? null,
+    );
+  } else {
+    const updates = {};
+    if (joined    !== undefined && joined    !== null) updates.joined      = joined;
+    if (has_left  !== undefined && has_left  !== null) updates.has_left    = has_left;
+    if (referrer_id !== undefined && referrer_id !== null) updates.referrer_id = referrer_id;
 
-// ─── Level roles (Friend B gets role → Member A earns points) ────────────────
+    if (Object.keys(updates).length === 0) return existing;
 
-function getLevelRoles(guildId) {
-  return _stmt('SELECT * FROM level_roles WHERE guild_id = ? ORDER BY points DESC').all(guildId);
-}
-
-function setLevelRoles(guildId, roles) {
-  const db = getDb();
-  db.exec('BEGIN');
-  try {
-    _stmt('DELETE FROM level_roles WHERE guild_id = ?').run(guildId);
-    for (const r of roles) {
-      _stmt('INSERT INTO level_roles (guild_id, role_id, role_name, points) VALUES (?, ?, ?, ?)')
-        .run(guildId, r.roleId, r.roleName, r.points);
-    }
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
+    const sets   = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+    const values = [...Object.values(updates), userId];
+    getDb().prepare(`UPDATE guild_members SET ${sets} WHERE user_id = ?`).run(...values);
   }
+  return getMember(userId);
 }
 
-function getLevelRoleByRoleId(guildId, roleId) {
-  return _stmt('SELECT * FROM level_roles WHERE guild_id = ? AND role_id = ?').get(guildId, roleId);
+function getMembersByReferrer(referrerId) {
+  return getDb().prepare('SELECT * FROM guild_members WHERE referrer_id = ?').all(referrerId);
+}
+
+function setMemberReferrer(userId, referrerId) {
+  getDb().prepare(`
+    INSERT INTO guild_members (user_id, referrer_id) VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET referrer_id = excluded.referrer_id
+  `).run(userId, referrerId);
+}
+
+// ─── Left members ─────────────────────────────────────────────────────────────
+
+function recordLeave(userId) {
+  getDb().prepare(`
+    INSERT INTO left_members (user_id, left_at) VALUES (?, datetime('now'))
+    ON CONFLICT(user_id) DO UPDATE SET left_at = excluded.left_at
+  `).run(userId);
+}
+
+// ─── Role point rewards ───────────────────────────────────────────────────────
+
+function getRoleReward(roleId) {
+  return getDb().prepare('SELECT * FROM role_point_rewards WHERE role_id = ?').get(roleId) ?? null;
+}
+
+function listRoleRewards() {
+  return getDb().prepare('SELECT * FROM role_point_rewards ORDER BY points_awarded DESC').all();
+}
+
+function upsertRoleReward(roleId, pointsAwarded) {
+  getDb().prepare(`
+    INSERT INTO role_point_rewards (role_id, points_awarded) VALUES (?, ?)
+    ON CONFLICT(role_id) DO UPDATE SET points_awarded = excluded.points_awarded
+  `).run(roleId, pointsAwarded);
+}
+
+function deleteRoleReward(roleId) {
+  getDb().prepare('DELETE FROM role_point_rewards WHERE role_id = ?').run(roleId);
+}
+
+function hasRoleRewardLog(userId, roleId) {
+  return !!getDb().prepare('SELECT 1 FROM role_reward_log WHERE user_id = ? AND role_id = ?').get(userId, roleId);
+}
+
+function insertRoleRewardLog(userId, roleId) {
+  getDb().prepare(`
+    INSERT OR IGNORE INTO role_reward_log (user_id, role_id) VALUES (?, ?)
+  `).run(userId, roleId);
+}
+
+// ─── Referral button cooldowns ────────────────────────────────────────────────
+
+function getCooldown(userId) {
+  return getDb().prepare('SELECT last_used FROM referral_button_cooldowns WHERE user_id = ?').get(userId) ?? null;
+}
+
+function upsertCooldown(userId) {
+  getDb().prepare(`
+    INSERT INTO referral_button_cooldowns (user_id, last_used) VALUES (?, datetime('now'))
+    ON CONFLICT(user_id) DO UPDATE SET last_used = excluded.last_used
+  `).run(userId);
+}
+
+// ─── Backup log ───────────────────────────────────────────────────────────────
+
+function insertBackupLog(filename) {
+  getDb().prepare(`
+    INSERT INTO db_backup_log (backup_at, filename) VALUES (datetime('now'), ?)
+  `).run(filename);
+}
+
+function getBackupLogs() {
+  return getDb().prepare('SELECT rowid, * FROM db_backup_log ORDER BY backup_at ASC').all();
+}
+
+function deleteBackupLog(rowid) {
+  getDb().prepare('DELETE FROM db_backup_log WHERE rowid = ?').run(rowid);
 }
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
@@ -363,22 +269,21 @@ module.exports = {
   getDb,
   // Config
   getConfig, setConfig,
-  // Reward roles
-  getRewardRoles, setRewardRoles,
-  // Invites
-  upsertInvite, getInvites,
-  // Referral invites
-  getReferralInvite, saveReferralInvite, getAllReferralCodes,
-  // Join events
-  recordJoin, getInviterForMember,
+  // Core referrer resolution
+  getReferrer,
+  // Invite codes
+  upsertInviteCode, getInviteCode, getInviteCodesByUser,
   // Points
-  addPoints, getMemberPoints, getPointsInRange, getPointsLog,
-  // Invite counts
-  getInviteCount, getInviteCountInRange,
-  // Guild stats
-  getGuildStats,
-  // Milestones
-  hasMilestone, recordMilestone,
-  // Level roles
-  getLevelRoles, setLevelRoles, getLevelRoleByRoleId,
+  getPoints, addPoints, setPoints, getLeaderboard,
+  // Guild members
+  getMember, upsertMember, getMembersByReferrer, setMemberReferrer,
+  // Left members
+  recordLeave,
+  // Role rewards
+  getRoleReward, listRoleRewards, upsertRoleReward, deleteRoleReward,
+  hasRoleRewardLog, insertRoleRewardLog,
+  // Cooldowns
+  getCooldown, upsertCooldown,
+  // Backup log
+  insertBackupLog, getBackupLogs, deleteBackupLog,
 };

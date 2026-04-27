@@ -1,23 +1,19 @@
-// src/events/guildMemberRemove.js
-// ReferralBuddy — Log member departures
-
 'use strict';
 
-const { logToChannel } = require('../utils/logger');
+const db      = require('../utils/database');
+const { log } = require('../utils/logger');
 
 module.exports = {
   name: 'guildMemberRemove',
 
-  async execute(member) {
-    await logToChannel(
-      member.guild,
-      'leave',
-      'Member Left',
-      `**${member.user.tag}** has left the server.`,
-      [
-        { name: '👤  Member', value: `${member.user.tag}\n\`${member.id}\``, inline: true },
-        { name: '📅  Joined', value: member.joinedAt ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>` : 'Unknown', inline: true },
-      ]
-    );
+  async execute(member, client) {
+    if (member.user.bot) return;
+
+    // Upsert into left_members and mark has_left in guild_members.
+    // joined is never reset to 0 on leave.
+    db.recordLeave(member.id);
+    db.upsertMember(member.id, { has_left: 1 });
+
+    await log(client, 'leave', `📤 Member \`${member.id}\` (${member.user.tag}) left the server.`);
   },
 };

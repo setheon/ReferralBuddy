@@ -1,75 +1,38 @@
-// src/events/guildMemberUpdate.js
-// ReferralBuddy — Watch for level roles being assigned to Friend B.
-//
-// When a levelling bot (MEE6, Arcane, Lurkr, etc.) assigns a role to Friend B
-// that is configured as a "level role" in ReferralBuddy, we:
-//   1. Find who originally invited Friend B (Member A).
-//   2. Check this milestone hasn't already been rewarded (idempotency).
-//   3. Award Member A the configured points.
-//   4. Log everything to the guild's log channel.
-
 'use strict';
 
-const db               = require('../utils/database');
-const { awardPoints }  = require('../utils/points');
-const { logToChannel } = require('../utils/logger');
+const db      = require('../utils/database');
+const { log } = require('../utils/logger');
 
 module.exports = {
   name: 'guildMemberUpdate',
 
-  async execute(oldMember, newMember) {
-    // Only care about role additions
-    const addedRoleIds = [...newMember.roles.cache.keys()]
-      .filter(id => !oldMember.roles.cache.has(id));
+  async execute(oldMember, newMember, client) {
+    // Find newly added roles
+    const addedRoles = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id));
+    if (addedRoles.size === 0) return;
 
-    if (!addedRoleIds.length) return;
+    for (const [roleId] of addedRoles) {
+      const reward = db.getRoleReward(roleId);
+      if (!reward) continue;
 
-    const guildId = newMember.guild.id;
+      // Already awarded this role reward to this member?
+      if (db.hasRoleRewardLog(newMember.id, roleId)) continue;
 
-    for (const roleId of addedRoleIds) {
-      // Is this a tracked level role?
-      const levelRole = db.getLevelRoleByRoleId(guildId, roleId);
-      if (!levelRole) continue;
+      // Resolve referrer via the single source of truth
+      const referrerId = db.getReferrer(newMember.id);
 
-      // Find who invited Friend B
-      const joinEvent = db.getInviterForMember(guildId, newMember.id);
-      if (!joinEvent?.inviter_id) {
-        await logToChannel(
-          newMember.guild, 'info',
-          'Level Role — No Inviter Found',
-          `<@${newMember.id}> received <@&${roleId}> (${levelRole.role_name}, +${levelRole.points} pts) but has no invite record — joined organically or before the bot was set up.`
+      if (!referrerId) {
+        await log(client, 'info',
+          `ℹ️ Role reward triggered for \`${newMember.id}\` (role \`${roleId}\`) but no referrer on record.`
         );
         continue;
       }
 
-      const inviterId  = joinEvent.inviter_id;
-      // Use role_id as the milestone key so each role can only reward once per referral
-      const milestone  = roleId;
+      const newTotal = db.addPoints(referrerId, reward.points_awarded);
+      db.insertRoleRewardLog(newMember.id, roleId);
 
-      // Idempotency — don't award twice for the same role on the same member
-      if (db.hasMilestone(guildId, newMember.id, inviterId, milestone)) continue;
-
-      db.recordMilestone(guildId, newMember.id, inviterId, milestone);
-
-      await awardPoints(
-        newMember.guild,
-        inviterId,
-        levelRole.points,
-        `Level role — <@${newMember.id}> received **${levelRole.role_name}**`,
-        newMember.id
-      );
-
-      await logToChannel(
-        newMember.guild,
-        'level',
-        'Level Role Milestone',
-        `<@${newMember.id}> received <@&${roleId}> — <@${inviterId}> earned **+${levelRole.points} pts**`,
-        [
-          { name: '👤 Member (B)',  value: `<@${newMember.id}>`,  inline: true },
-          { name: '🎯 Role',        value: `<@&${roleId}>`,        inline: true },
-          { name: '⭐ Points to A', value: `+${levelRole.points}`, inline: true },
-          { name: '📨 Inviter (A)', value: `<@${inviterId}>`,      inline: true },
-        ]
+      await log(client, 'points',
+        `⭐ \`${newMember.id}\` received role \`${roleId}\` — referrer \`${referrerId}\` awarded **${reward.points_awarded}** point(s) (total: **${newTotal}**).`
       );
     }
   },
