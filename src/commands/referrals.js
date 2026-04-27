@@ -1,14 +1,14 @@
 'use strict';
 
-const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 const db      = require('../utils/database');
 const { log } = require('../utils/logger');
+const { isAuthorized, denyUnauthorized } = require('../utils/auth');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('referrals')
-    .setDescription('Referral management (Administrator only)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDescription('Referral management')
     .addSubcommand(s => s
       .setName('check')
       .setDescription('Check a user\'s invite codes and referred members')
@@ -22,6 +22,7 @@ module.exports = {
     ),
 
   async execute(interaction, client) {
+    if (!isAuthorized(interaction.member)) return denyUnauthorized(interaction);
     const sub = interaction.options.getSubcommand();
     await interaction.deferReply({ flags: 1 << 6 }); // ephemeral
 

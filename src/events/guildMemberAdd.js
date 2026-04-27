@@ -64,8 +64,21 @@ module.exports = {
 
     // ── Skip point award checks ───────────────────────────────────────────────
     if (member.user.bot) return;
-    if (!inviteRow)                    return;
-    if (inviteRow.created_by_bot)      return;
+    if (!inviteRow) return;
+
+    // Bot-created invite with no human owner on record.
+    // This means the invite exists in Discord (created by the bot on someone's
+    // behalf) but the member never clicked "Get My Referral Link", so we have
+    // no entry in invite_codes mapping this code to a real user. If the member
+    // DID click the button, syncInviteCode preserves their ID across restarts
+    // and created_by_bot will be false — so this branch is only hit for
+    // truly unowned bot-created invites.
+    if (inviteRow.created_by_bot) {
+      await log(client, 'warn',
+        `⚠️ Member \`${member.id}\` joined via bot-created invite \`${usedCode}\` but no referral button owner is on record. No points awarded.`
+      );
+      return;
+    }
 
     const existing = db.getMember(member.id);
     if (existing?.joined === 1)        return;
@@ -86,7 +99,7 @@ module.exports = {
     }
 
     // ── Award point ───────────────────────────────────────────────────────────
-    const newTotal = db.addPoints(confirmedReferrer, 1);
+    const newTotal = db.addPoints(confirmedReferrer, 1, 'join');
     db.upsertMember(member.id, { joined: 1 });
 
     await log(client, 'success',

@@ -75,6 +75,17 @@ function _initSchema() {
       backup_at TEXT NOT NULL,
       filename  TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS point_ledger (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id   TEXT    NOT NULL,
+      delta     INTEGER NOT NULL,
+      reason    TEXT,
+      earned_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pl_user   ON point_ledger(user_id);
+    CREATE INDEX IF NOT EXISTS idx_pl_earned ON point_ledger(earned_at);
   `);
 }
 
@@ -101,6 +112,10 @@ function getReferrer(userId) {
 
 // ─── Invite codes ─────────────────────────────────────────────────────────────
 
+/**
+ * Always-write upsert. Used when a member explicitly claims an invite via
+ * the referral button — we always want to record the real owner.
+ */
 function upsertInviteCode(code, createdById, createdByBot) {
   getDb().prepare(`
     INSERT INTO invite_codes (code, created_by_id, created_by_bot)
@@ -108,6 +123,32 @@ function upsertInviteCode(code, createdById, createdByBot) {
     ON CONFLICT(code) DO UPDATE SET
       created_by_id  = excluded.created_by_id,
       created_by_bot = excluded.created_by_bot
+  `).run(code, createdById ?? null, createdByBot ? 1 : 0);
+}
+
+/**
+ * Safe sync upsert used during startup and cache refreshes.
+ *
+ * When Discord reports that the bot created an invite, it cannot tell us
+ * who the real member owner is — the bot creates invites on members' behalf.
+ * If our DB already has a human-claimed record (created_by_bot = 0) for this
+ * code, we preserve it. Only overwrite if the existing record is also bot-
+ * created (or there is no existing record).
+ *
+ * This ensures a bot restart never clobbers the real member ID stored when
+ * they clicked "Get My Referral Link".
+ */
+function syncInviteCode(code, createdById, createdByBot) {
+  getDb().prepare(`
+    INSERT INTO invite_codes (code, created_by_id, created_by_bot)
+    VALUES (?, ?, ?)
+    ON CONFLICT(code) DO UPDATE SET
+      created_by_id  = CASE WHEN invite_codes.created_by_bot = 0
+                            THEN invite_codes.created_by_id
+                            ELSE excluded.created_by_id END,
+      created_by_bot = CASE WHEN invite_codes.created_by_bot = 0
+                            THEN 0
+                            ELSE excluded.created_by_bot END
   `).run(code, createdById ?? null, createdByBot ? 1 : 0);
 }
 
@@ -125,25 +166,62 @@ function getPoints(userId) {
   return getDb().prepare('SELECT points FROM referral_points WHERE user_id = ?').get(userId)?.points ?? 0;
 }
 
-function addPoints(userId, delta) {
+function addPoints(userId, delta, reason = 'unknown') {
   getDb().prepare(`
     INSERT INTO referral_points (user_id, points) VALUES (?, MAX(0, ?))
     ON CONFLICT(user_id) DO UPDATE SET points = MAX(0, points + ?)
   `).run(userId, Math.max(0, delta), delta);
+
+  // Always record to ledger so period queries work
+  getDb().prepare(`
+    INSERT INTO point_ledger (user_id, delta, reason) VALUES (?, ?, ?)
+  `).run(userId, delta, reason);
+
   return getPoints(userId);
 }
 
-function setPoints(userId, value) {
+function setPoints(userId, value, reason = 'admin_set') {
+  const current = getPoints(userId);
   const clamped = Math.max(0, value);
+
   getDb().prepare(`
     INSERT INTO referral_points (user_id, points) VALUES (?, ?)
     ON CONFLICT(user_id) DO UPDATE SET points = ?
   `).run(userId, clamped, clamped);
+
+  // Record the net delta so the ledger stays accurate
+  const delta = clamped - current;
+  if (delta !== 0) {
+    getDb().prepare(`
+      INSERT INTO point_ledger (user_id, delta, reason) VALUES (?, ?, ?)
+    `).run(userId, delta, reason);
+  }
+
   return clamped;
 }
 
+/** All-time leaderboard — reads the running total. */
 function getLeaderboard(limit = 10) {
   return getDb().prepare('SELECT user_id, points FROM referral_points ORDER BY points DESC LIMIT ?').all(limit);
+}
+
+/**
+ * Period leaderboard — sums point_ledger entries between two UTC timestamps.
+ * @param {number} limit
+ * @param {string} since  – ISO-like UTC string "YYYY-MM-DD HH:MM:SS"
+ * @param {string|null} until – defaults to now
+ */
+function getLeaderboardByPeriod(limit = 10, since, until = null) {
+  const untilStr = until ?? new Date().toISOString().replace('T', ' ').slice(0, 19);
+  return getDb().prepare(`
+    SELECT user_id, SUM(delta) AS points
+    FROM   point_ledger
+    WHERE  earned_at >= ? AND earned_at <= ?
+    GROUP  BY user_id
+    HAVING SUM(delta) > 0
+    ORDER  BY points DESC
+    LIMIT  ?
+  `).all(since, untilStr, limit);
 }
 
 // ─── Guild members ────────────────────────────────────────────────────────────
@@ -272,9 +350,9 @@ module.exports = {
   // Core referrer resolution
   getReferrer,
   // Invite codes
-  upsertInviteCode, getInviteCode, getInviteCodesByUser,
+  upsertInviteCode, syncInviteCode, getInviteCode, getInviteCodesByUser,
   // Points
-  getPoints, addPoints, setPoints, getLeaderboard,
+  getPoints, addPoints, setPoints, getLeaderboard, getLeaderboardByPeriod,
   // Guild members
   getMember, upsertMember, getMembersByReferrer, setMemberReferrer,
   // Left members

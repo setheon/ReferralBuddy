@@ -28,7 +28,7 @@ module.exports = {
         continue;
       }
 
-      const newTotal = db.addPoints(referrerId, reward.points_awarded);
+      const newTotal = db.addPoints(referrerId, reward.points_awarded, 'milestone_role');
       db.insertRoleRewardLog(newMember.id, roleId);
 
       await log(client, 'points',

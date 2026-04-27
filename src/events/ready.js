@@ -18,12 +18,14 @@ module.exports = {
         const invites = await guild.invites.fetch();
         inviteCache.rebuild(invites);
 
-        // Sync known invite codes into the DB
+        // Sync invite codes into the DB.
+        // Uses syncInviteCode so a restart never overwrites a human-claimed
+        // record with the bot's ID (the bot creates invites on members' behalf).
         for (const [, inv] of invites) {
-          db.upsertInviteCode(
+          db.syncInviteCode(
             inv.code,
-            inv.inviter?.id   ?? null,
-            inv.inviter?.bot  ?? false,
+            inv.inviter?.id  ?? null,
+            inv.inviter?.bot ?? false,
           );
         }
 

@@ -1,15 +1,16 @@
 'use strict';
 
-const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 const db = require('../utils/database');
+const { isAuthorized, denyUnauthorized } = require('../utils/auth');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('catalogue-members')
-    .setDescription('Manually catalogue all guild members into the database (Administrator only)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    .setDescription('Manually catalogue all guild members into the database'),
 
   async execute(interaction) {
+    if (!isAuthorized(interaction.member)) return denyUnauthorized(interaction);
     await interaction.deferReply({ flags: 1 << 6 }); // ephemeral
 
     let newCount      = 0;
