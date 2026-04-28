@@ -23,7 +23,7 @@ module.exports = {
 
       if (!referrerId) {
         await log(client, 'info',
-          `ℹ️ Role reward triggered for \`${newMember.id}\` (role \`${roleId}\`) but no referrer on record.`
+          `Role reward triggered for \`${newMember.id}\` (role \`${roleId}\`) but no referrer on record.`
         );
         continue;
       }
@@ -32,7 +32,7 @@ module.exports = {
       db.insertRoleRewardLog(newMember.id, roleId);
 
       await log(client, 'points',
-        `⭐ \`${newMember.id}\` received role \`${roleId}\` — referrer \`${referrerId}\` awarded **${reward.points_awarded}** point(s) (total: **${newTotal}**).`
+        `\`${newMember.id}\` received role \`${roleId}\` — referrer \`${referrerId}\` awarded **${reward.points_awarded}** point(s) (total: **${newTotal}**).`
       );
     }
   },

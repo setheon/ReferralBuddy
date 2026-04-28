@@ -57,7 +57,7 @@ module.exports = {
       }
     }
 
-    await log(client, 'info', `🤖 Bot online. Catalogued **${newCount}** new member(s). **${existingCount}** already existed.`);
+    await log(client, 'info', `Bot online. Catalogued **${newCount}** new member(s). **${existingCount}** already existed.`);
 
     // ── Automatic database backup ─────────────────────────────────────────────
     try {

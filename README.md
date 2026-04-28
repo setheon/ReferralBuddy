@@ -1,6 +1,6 @@
 # 🔗 ReferralBuddy
 
-A Discord referral tracking bot. Members click a button to get a personal invite link, earn points when referrals join and level up, and admins get full visibility into who invited whom — all logged to a dedicated channel in real time.
+A Discord referral tracking bot. Members click a button to receive their personal invite link via DM, earn points when referrals join and hit milestones, and admins get full visibility into attribution — all logged to a dedicated channel in real time.
 
 ---
 
@@ -30,15 +30,18 @@ A Discord referral tracking bot. Members click a button to get a personal invite
 
 | Feature | Detail |
 |---|---|
-| **Personal referral links** | Members click "Get My Referral Link" to receive a unique, permanent invite link. Rate-limited to once per hour. |
+| **Personal referral links** | Members click "Get My Referral Link" to receive a unique, permanent invite link via DM. Rate-limited to once per hour. |
 | **Join tracking** | Diffs invite use-counts on every `guildMemberAdd` to determine which invite was used. Catalogues the joiner and awards the referrer 1 point. |
 | **Self-referral protection** | Members cannot earn points from themselves — detected and blocked at join time. |
 | **Rejoin protection** | Points are only awarded once per (referrer, joiner) pair. Rejoining never re-awards a point. |
-| **Role-based point rewards** | When a referred member receives a configured role (e.g. from a levelling bot), their referrer earns the configured point value. |
-| **Admin tools** | Check, adjust, and view the leaderboard. Manually set referrers for dispute resolution. |
-| **Database backups** | Auto-backup on every startup with 10-backup retention. Manual trigger available via `/backup-db`. |
-| **Member catalogue** | Full guild catalogue on startup and on demand — members are tracked without losing any existing data. |
-| **Log channel** | All significant events are posted as embeds to a configurable log channel. Falls back to console-only if not configured. |
+| **Milestone roles** | When a referred member receives a configured role (e.g. from a levelling bot), their referrer earns the configured point value. |
+| **Point ledger** | Every point change is stamped with a UTC timestamp and reason (`join`, `milestone_role`, `admin_adjust`). Powers all period-based leaderboards. |
+| **Timed leaderboards** | Two-column public leaderboard (Top Inviters + Top Earners). Filter by Today, This Week, This Month, This Year, All Time, or a Custom date range. |
+| **Personal stats** | `/stats` shows any member their points, rank, referred members, and who referred them. |
+| **Role-based auth** | Admin commands are gated by a configurable role ID (`ADMIN_ROLE_ID`), not Discord's Administrator permission, so visibility is not affected for non-admins. |
+| **Interactive panels** | `/setup` and `/debug` open embed panels with buttons — no subcommands to remember. |
+| **Database backups** | Auto-backup on every startup with 10-backup retention. Manual trigger in the debug panel. |
+| **Log channel** | All significant events are posted as colour-coded embeds to a configurable log channel. Falls back to console-only if not configured. |
 
 ---
 
@@ -104,14 +107,15 @@ Friend B clicks Member A's referral link and joins
   │    └─ Mismatch → log discrepancy, stop
   │
   └─ Award 1 point to A, set B.joined = 1, log success
+       └─ Point written to point_ledger with reason = 'join'
 ```
 
 ---
 
-### Role Reward Flow
+### Milestone Role Flow
 
 ```
-Friend B receives a role configured in role_point_rewards
+Friend B receives a role configured as a milestone role
   │
   ├─ Check role_reward_log (user_id, role_id) — already awarded? Stop.
   │
@@ -119,6 +123,7 @@ Friend B receives a role configured in role_point_rewards
   │    └─ null → log "no referrer on record", stop
   │
   ├─ Award points_awarded to A in referral_points
+  ├─ Write to point_ledger with reason = 'milestone_role'
   ├─ Insert into role_reward_log (idempotency)
   └─ Log success
 ```
@@ -130,17 +135,17 @@ Friend B receives a role configured in role_point_rewards
 ```
 Member A presses "Get My Referral Link"
   │
-  ├─ Check referral_button_cooldowns
-  │    └─ Used within last hour? Reply with exact remaining cooldown, stop.
+  ├─ Check referral_button_cooldowns (synchronous — before deferring)
+  │    └─ Used within last hour? Reply with remaining cooldown, stop.
   │
+  ├─ Defer interaction (acknowledges within 3 s, buys 15 min for async work)
   ├─ Update cooldown timestamp
   ├─ Fetch existing guild invites, upsert any of A's codes into invite_codes
   ├─ Create new invite (maxAge=0, maxUses=0, unique=true)
-  ├─ Upsert new code into invite_codes with created_by_id = A.id, created_by_bot = false
+  ├─ Upsert new code: created_by_id = A.id, created_by_bot = false
   ├─ Update invite cache
-  ├─ Reply ephemerally to A with invite URL
-  ├─ Post invite URL in referral channel
-  └─ Log to log channel
+  ├─ DM the invite URL to A
+  └─ Reply ephemerally in the referral channel (fallback if DMs are closed)
 ```
 
 ---
@@ -162,7 +167,7 @@ Member B leaves the server
 ### Startup Sequence
 
 1. Rebuild in-memory invite cache from current guild invites
-2. Sync invite codes into `invite_codes` table
+2. Sync invite codes into `invite_codes` table (`syncInviteCode` — never overwrites human-claimed records)
 3. Catalogue all human guild members (without overwriting existing data)
 4. Run automatic database backup
 5. Post startup summary to log channel
@@ -176,7 +181,7 @@ Member B leaves the server
   - **Linux/macOS:** `build-essential` / Xcode Command Line Tools
   - **Windows:** `npm install --global windows-build-tools`
 - A Discord account with permission to create applications
-- A server where you have **Administrator** permission
+- A server where you can manage roles
 
 ---
 
@@ -188,7 +193,6 @@ Member B leaves the server
 
 3. Under **Privileged Gateway Intents**, enable:
    - ✅ **Server Members Intent** — required for join/leave/role events
-   - ✅ **Message Content Intent** — required if you plan to extend the bot
 
 4. **OAuth2 → URL Generator** — select scopes:
    - `bot`
@@ -223,7 +227,7 @@ npm install
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env — fill in BOT_TOKEN, CLIENT_ID, GUILD_ID
+# Edit .env — fill in BOT_TOKEN, CLIENT_ID, GUILD_ID, ADMIN_ROLE_ID
 
 # 4. Register slash commands
 #    With GUILD_ID set → instant (use this during setup)
@@ -236,16 +240,10 @@ npm start
 
 **Expected startup console output:**
 ```
-  ✔  Loaded command: /setup
-  ✔  Loaded command: /points
-  ✔  Loaded command: /referrals
-  ✔  Loaded command: /catalogue-members
-  ✔  Loaded command: /backup-db
-  ✔  Registered event: ready (once)
-  ✔  Registered event: guildMemberAdd
-  ✔  Registered event: guildMemberRemove
-  ✔  Registered event: guildMemberUpdate
-  ✔  Registered event: interactionCreate
+[timestamp] ℹ  Logged in as ReferralBuddy#0000 (id)
+[timestamp] 🔗  Cached N invite(s) for YourServer
+[timestamp] ℹ  Bot online. Catalogued N new member(s). N already existed.
+[timestamp] 💾  Backup saved: backup-YYYY-MM-DDTHH-MM-SS.db
 ```
 
 ### Environment Variables
@@ -254,113 +252,130 @@ npm start
 |---|---|---|
 | `BOT_TOKEN` | ✅ | Your Discord bot token |
 | `CLIENT_ID` | ✅ | Your application's client ID (for deploy-commands) |
-| `GUILD_ID` | Optional | Guild ID for instant guild-scoped command registration |
+| `GUILD_ID` | Recommended | Guild ID for instant guild-scoped command registration |
+| `ADMIN_ROLE_ID` | Recommended | Role ID whose members can use all admin commands. Falls back to Administrator permission if not set. |
 | `DB_PATH` | Optional | Override the SQLite file path (default: `./data/referralbuddy.db`) |
 
 ---
 
 ## Bot Configuration (`/setup`)
 
-All `/setup` subcommands require **Administrator** permission.
+`/setup` opens an interactive embed panel. No subcommands — use the buttons.
+
+> Requires the role configured in `ADMIN_ROLE_ID`.
 
 ### First-time setup order
 
 ```
-1. /setup set-log-channel      — where the bot posts logs
-2. /setup set-referral-channel — where the panel and links are posted
-3. /setup post-panel           — posts the "Get My Referral Link" button embed
-4. /setup add-role-reward      — (optional) configure role-based point rewards
+1. Click "Log Channel"      — select the channel where the bot posts logs
+2. Click "Referral Channel" — select the channel where the panel lives
+3. Click "Post Panel"       — posts the "Get My Referral Link" embed
+4. Click "Add Milestone Role" — (optional) configure role-based point rewards
 ```
 
-### `/setup set-log-channel channel:#channel`
-Sets the channel where all bot log messages are posted. If not configured, the bot logs to console only.
+### Buttons
 
-### `/setup set-referral-channel channel:#channel`
-Sets the channel where the referral panel is posted and where new invite links are announced.
-
-### `/setup post-panel`
-Posts the referral panel embed with the "Get My Referral Link" button into the configured referral channel. Re-run this if the panel message was deleted.
-
-### `/setup add-role-reward role:@Role points:<integer>`
-Configures a role so that when a referred member receives it, their referrer earns the specified points. Designed to integrate with levelling bots (MEE6, Arcane, Lurkr, etc.).
-
-```
-/setup add-role-reward role:@Level 1  points:10
-/setup add-role-reward role:@Level 10 points:100
-```
-
-### `/setup remove-role-reward role:@Role`
-Removes a role from the reward configuration. Existing awarded points are not affected.
-
-### `/setup list-role-rewards`
-Lists all currently configured role rewards.
+| Button | Action |
+|---|---|
+| 📋 **Log Channel** | Opens a channel picker. Saves immediately on selection. |
+| 🔗 **Referral Channel** | Opens a channel picker. Saves immediately on selection. |
+| 📢 **Post Panel** | Posts the referral panel embed (with "Get My Referral Link" button) into the configured referral channel. |
+| ➕ **Add Milestone Role** | Opens a modal — type a role name or ID, then the points to award the referrer when any referred member receives that role. Supports servers with any number of roles. |
+| ➖ **Remove Milestone Role** | Opens a modal — type the role name or ID to remove. |
 
 ---
 
 ## Commands Reference
 
-### `/points check user:@User`
-*Administrator only*
+### Public Commands
+
+#### `/stats`
+*Available to everyone*
+
+Shows your own referral stats as a private embed:
+- ⭐ Total points and all-time rank (with medal for top 3)
+- 👥 List of everyone you've referred (as mentions)
+- 🔗 Number of invite codes you've generated
+- 📨 Who referred you
+
+---
+
+#### `/points leaderboard [period] [start] [end]`
+*Available to everyone — posts publicly in channel*
+
+Two-column leaderboard embed showing **Top Inviters** (by join count) and **Top Earners** (by points).
+
+| Option | Values | Default behaviour |
+|---|---|---|
+| `period` | Today · This Week · This Month · This Year · All Time · Custom | No option = This Month inviters + All Time earners |
+| `start` | `YYYY-MM-DD` | Required only when period is Custom |
+| `end` | `YYYY-MM-DD` | Defaults to today when period is Custom |
+
+When a period is specified, both columns reflect that same period.
+
+---
+
+### Admin Commands
+
+> All admin commands require the role set in `ADMIN_ROLE_ID`.
+
+#### `/points check user:@User`
 
 Displays a user's current point total and who referred them.
 
-```
-@FriendB has 42 referral point(s).
-Referred by: @MemberA (MemberA#0001)
-```
+---
+
+#### `/referrals user:@User`
+
+Shows how many invite codes the user has created and lists every member they've successfully referred.
 
 ---
 
-### `/points leaderboard`
-*Administrator only*
+#### `/setup`
 
-Posts a top-10 leaderboard embed sorted by points descending.
-
----
-
-### `/points adjust user:@User amount:<integer>`
-*Administrator only*
-
-Adds or subtracts points from a user. Points floor at 0 — they cannot go negative.
-
-```
-/points adjust user:@MemberA amount:50    → adds 50
-/points adjust user:@MemberA amount:-25   → subtracts 25
-```
-
-Logged to the log channel with the admin's ID, the adjustment, and the new total.
+Opens the interactive bot configuration panel. See [Bot Configuration](#bot-configuration-setup).
 
 ---
 
-### `/referrals check user:@User`
-*Administrator only*
+#### `/debug`
 
-Shows how many invite codes the user has created and how many members they have successfully referred. Lists referred members by username if any exist.
-
----
-
-### `/referrals set-referrer user:@User referrer:@Referrer`
-*Administrator only*
-
-Manually overrides the `referrer_id` on a member's record. Used for dispute resolution or to correct attribution errors. Self-referral (`@User === @Referrer`) is blocked.
-
-Logged to the log channel.
+Opens the full admin debug panel. See [Debug Panel](#debug-panel) below.
 
 ---
 
-### `/catalogue-members`
-*Administrator only*
+### Debug Panel (`/debug`)
 
-Manually re-runs the startup member catalogue for the current guild. Safe to run at any time — never overwrites existing `joined`, `has_left`, or `referrer_id` values.
+`/debug` opens an ephemeral embed showing a live status snapshot (members tracked, invite codes, total points, ping, uptime, memory) with three rows of action buttons.
 
-Responds ephemerally with a count of newly catalogued vs. already-existing members.
+> Requires `ADMIN_ROLE_ID`.
 
----
+#### Row 1 — System
 
-### `/backup-db`
-*Administrator only*
+| Button | Action |
+|---|---|
+| 👥 **Catalogue Members** | Fetches all guild members and upserts any not yet in the database. Reports new vs existing count. |
+| 💾 **Backup DB** | Triggers an immediate hot backup to `/backups`. Reports filename and timestamp. 10-backup retention applies. |
+| 🔄 **Sync Invites** | Re-fetches all guild invites from Discord, syncs them into `invite_codes`, and rebuilds the in-memory cache. Use after the bot misses a period of activity. |
+| 🧹 **Clear Cooldowns** | Wipes all referral button cooldowns. Useful for testing without waiting an hour. |
+| ♻️ **Refresh** | Re-renders the debug embed in-place with live stats. |
 
-Triggers an immediate database backup to the `/backups` directory. Responds with the filename and timestamp. The 10-backup retention policy applies.
+#### Row 2 — Data
+
+| Button | Action |
+|---|---|
+| 🔍 **Check Points** | Modal: enter a User ID → shows their point total and referrer. |
+| 👥 **Check Referrals** | Modal: enter a User ID → shows their invite code count and full list of referred members. |
+| ➕ **Adjust Points** | Modal: enter a User ID + amount → adds or subtracts points. Logged to the log channel. |
+| 🔧 **Set Referrer** | Modal: enter a Member ID + Referrer ID → manually overrides the referrer on record. Used for dispute resolution. Self-referral is blocked. |
+
+#### Row 3 — Debug Tools
+
+| Button | Action |
+|---|---|
+| 🧪 **Test All Logs** | Fires one message per log type (`info → success → warn → error → points → invite → leave → backup → admin`) in order to your log channel, each labelled "DEBUG TESTING". |
+| 📢 **Test Referral Ch.** | Posts a clearly-labelled DEBUG embed to the configured referral channel to verify it is reachable. |
+| 📊 **Bot Status** | Shows a full status report: all DB table counts, point ledger size, invite cache size, uptime, WS latency, heap + RSS memory, Node.js version, and all config values. |
+| ⚙️ **View Config** | Dumps every row in `bot_config` as a quick reference. |
 
 ---
 
@@ -481,7 +496,7 @@ Podman runs containers without root. The data directory lives in your home folde
 # Build
 podman build -t localhost/referralbuddy:latest .
 
-# Create named volume for data persistence
+# Create named volumes for data persistence
 podman volume create referralbuddy_data
 podman volume create referralbuddy_backups
 
@@ -497,10 +512,6 @@ podman run -d \
 
 # View logs
 podman logs -f referralbuddy
-
-# Stop / remove
-podman stop referralbuddy
-podman rm referralbuddy
 ```
 
 > The `:Z` volume flag sets the correct SELinux label on Fedora/RHEL hosts.
@@ -508,16 +519,12 @@ podman rm referralbuddy
 **Auto-start on login (user-level systemd):**
 
 ```bash
-# Generate a systemd service from the running container
 podman generate systemd --name referralbuddy --files --new
 mkdir -p ~/.config/systemd/user
 mv container-referralbuddy.service ~/.config/systemd/user/
 
 systemctl --user daemon-reload
 systemctl --user enable --now container-referralbuddy
-systemctl --user status container-referralbuddy
-
-# Follow logs
 journalctl --user -u container-referralbuddy -f
 ```
 
@@ -528,18 +535,12 @@ journalctl --user -u container-referralbuddy -f
 Quadlet is the modern Podman-native approach — no separate service file needed. Requires **Podman ≥ 4.4** (Fedora 38+, RHEL 9.2+).
 
 ```bash
-# Build the image
 podman build -t localhost/referralbuddy:latest .
-
-# Prepare config and data directories
 mkdir -p ~/.config/referralbuddy
 cp .env ~/.config/referralbuddy/referralbuddy.env
-
-# Edit the env file — ensure BOT_TOKEN, CLIENT_ID, GUILD_ID are set
-nano ~/.config/referralbuddy/referralbuddy.env
 ```
 
-Create the Quadlet container unit at `~/.config/containers/systemd/referralbuddy.container`:
+Create `~/.config/containers/systemd/referralbuddy.container`:
 
 ```ini
 [Unit]
@@ -568,54 +569,25 @@ WantedBy=default.target
 ```
 
 ```bash
-# Create data directories
 mkdir -p ~/.local/share/referralbuddy/data
 mkdir -p ~/.local/share/referralbuddy/backups
 
-# Enable and start
 systemctl --user daemon-reload
 systemctl --user enable --now referralbuddy
-
-# Status and logs
-systemctl --user status referralbuddy
 journalctl --user -u referralbuddy -f
-```
-
-**System-wide (root) Quadlet:**
-
-```bash
-# Place unit in the system path
-sudo cp referralbuddy.container /etc/containers/systemd/
-
-# Edit the unit — replace %h with absolute paths, e.g. /opt/referralbuddy
-sudo nano /etc/containers/systemd/referralbuddy.container
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now referralbuddy
-sudo journalctl -u referralbuddy -f
 ```
 
 ---
 
 ### Option 6: Systemd Service (no containers)
 
-For servers where you want Node.js directly managed by systemd.
-
 ```bash
-# Create a dedicated system user
 sudo useradd -r -m -d /opt/referralbuddy -s /bin/false referralbuddy
-
-# Copy project
 sudo cp -r . /opt/referralbuddy/
 sudo chown -R referralbuddy:referralbuddy /opt/referralbuddy
-
-# Install dependencies as the service user
 sudo -u referralbuddy bash -c "cd /opt/referralbuddy && npm ci --omit=dev"
-
-# Place your .env
 sudo cp .env /opt/referralbuddy/.env
 sudo chmod 600 /opt/referralbuddy/.env
-sudo chown referralbuddy:referralbuddy /opt/referralbuddy/.env
 ```
 
 Create `/etc/systemd/system/referralbuddy.service`:
@@ -662,20 +634,23 @@ SQLite database at `DB_PATH` (default: `./data/referralbuddy.db`). All timestamp
 |---|---|---|
 | `bot_config` | `key` | Key-value store for `log_channel_id`, `referral_channel_id` |
 | `invite_codes` | `code` | Every tracked invite code with its owner (`created_by_id`) and whether the bot created it |
-| `referral_points` | `user_id` | Running point total per user |
+| `referral_points` | `user_id` | Running point total per user (fast reads for all-time lookups) |
+| `point_ledger` | `id` (autoincrement) | Every point change with `delta`, `reason`, and `earned_at` timestamp — powers all period leaderboards |
 | `guild_members` | `user_id` | Join/leave status and referrer for every tracked member |
 | `left_members` | `user_id` | Departure log with timestamp |
-| `role_point_rewards` | `role_id` | Roles that trigger point awards to referrers |
-| `role_reward_log` | `(user_id, role_id)` | Idempotency guard — prevents awarding the same role reward twice |
+| `role_point_rewards` | `role_id` | Milestone roles that trigger point awards to referrers |
+| `role_reward_log` | `(user_id, role_id)` | Idempotency guard — prevents awarding the same milestone role reward twice |
 | `referral_button_cooldowns` | `user_id` | Tracks last button press time for rate limiting |
-| `db_backup_log` | `rowid` | Record of every backup created (used for pruning) |
+| `db_backup_log` | `rowid` | Record of every backup created (used for rolling retention) |
 
 ### Key design decisions
 
-- **`guild_members.joined` is never reset to 0 on leave.** This is the leave-rejoin fraud guard — once a referrer is credited for a member joining, that credit is permanent.
-- **`role_reward_log` is a composite-key table.** One row per `(user, role)` pair. Inserting a duplicate silently no-ops (`INSERT OR IGNORE`). This makes role reward attribution fully idempotent even if Discord fires `guildMemberUpdate` multiple times.
+- **`guild_members.joined` is never reset to 0 on leave.** This is the rejoin fraud guard — once a referrer is credited for a member joining, that credit is permanent regardless of how many times the member leaves and returns.
+- **`role_reward_log` is a composite-key table.** One row per `(user, role)` pair. Inserting a duplicate silently no-ops (`INSERT OR IGNORE`). Role reward attribution is fully idempotent even if Discord fires `guildMemberUpdate` multiple times.
 - **`referral_points` floors at 0.** The `addPoints` and `setPoints` functions use `MAX(0, ...)` — points can never go negative.
-- **`getReferrer` is the only referrer lookup.** No event or command queries `guild_members.referrer_id` directly. This means if referrer resolution logic ever needs to change, it changes in one place.
+- **`point_ledger` is append-only.** The running total in `referral_points` is updated atomically alongside every ledger write. Period leaderboards always query the ledger; all-time leaderboards always query `referral_points` for speed.
+- **`getReferrer` is the only referrer lookup.** No event or command queries `guild_members.referrer_id` directly. If referrer resolution logic ever needs to change, it changes in one place.
+- **`syncInviteCode` vs `upsertInviteCode`.** Bot restarts use `syncInviteCode`, which preserves any human-claimed record (`created_by_bot = 0`). The referral button uses `upsertInviteCode`, which always overwrites. This ensures a restart never clobbers the real member ID stored when someone clicked "Get My Referral Link".
 
 ---
 
@@ -684,33 +659,40 @@ SQLite database at `DB_PATH` (default: `./data/referralbuddy.db`). All timestamp
 **Joins show as ambiguous — "Could not determine invite code"**
 - The bot was offline when the member joined, so the invite cache was stale.
 - Two members joined simultaneously on different invites — the diff is ambiguous.
-- Use `/referrals set-referrer` to manually attribute the join.
+- Use **Debug → Set Referrer** to manually attribute the join.
+- Use **Debug → Sync Invites** to force-rebuild the invite cache from Discord.
 
 **No points awarded after a valid join**
-- Check that `Server Members Intent` is enabled in the Developer Portal under Privileged Gateway Intents.
-- Confirm the invite code appears in the `invite_codes` table with the correct `created_by_id`.
-- If `guild_members.joined` is already `1` for the joining member, they are a rejoin and no points are awarded by design.
+- Check that **Server Members Intent** is enabled in the Developer Portal.
+- Confirm the invite code appears in `invite_codes` with the correct `created_by_id`.
+- If `guild_members.joined` is already `1` for the joining member, they are a rejoin — no points are awarded by design.
 
-**Role rewards not firing**
-- Run `/setup list-role-rewards` to confirm the role is configured.
-- Ensure `Server Members Intent` is enabled — it is required for `guildMemberUpdate`.
-- Check the log channel for a "no referrer on record" message, which means `getReferrer()` returned `null` for that member. Use `/referrals set-referrer` to fix the record.
+**Milestone role rewards not firing**
+- Open `/setup` and verify the role is listed under 🏆 Milestone Roles.
+- Ensure **Server Members Intent** is enabled — required for `guildMemberUpdate`.
+- Check the log channel for a "no referrer on record" message. Use **Debug → Set Referrer** to fix the attribution.
 
-**"Get My Referral Link" button gives a cooldown error immediately**
+**"Get My Referral Link" button shows a cooldown immediately**
 - The member pressed the button within the last hour. The reply shows the exact remaining wait time.
+- Admins can clear all cooldowns via **Debug → Clear Cooldowns**.
+
+**Referral link not arriving in DMs**
+- The member's DM settings may block messages from server members.
+- The link is always shown as an ephemeral reply in the referral channel as a fallback.
 
 **Slash commands don't appear in Discord**
 - Run `npm run deploy` to register them.
 - With `GUILD_ID`: instant. Without `GUILD_ID` (global): up to 1 hour.
+- Commands are visible to all members but only executable by holders of `ADMIN_ROLE_ID` (except `/stats` and `/points leaderboard`, which are public).
+
+**Log channel not receiving messages**
+- Run **Debug → Test All Logs** to fire a test message of every log type.
+- Ensure the bot has `Send Messages` and `Embed Links` permissions in the log channel.
 
 **Database errors on startup**
 - Only one bot process should access the database at a time.
 - Ensure the `data/` and `backups/` directories are writable by the process user.
-- If the database is corrupted, restore from the latest file in `backups/`.
-
-**Backups fail**
-- `better-sqlite3`'s `.backup()` method performs a safe online backup — the database does not need to be offline.
-- Ensure the `backups/` directory exists and is writable.
+- Restore from the latest file in `backups/` if the database is corrupted.
 
 ---
 
@@ -718,7 +700,7 @@ SQLite database at `DB_PATH` (default: `./data/referralbuddy.db`). All timestamp
 
 - **Never commit `.env`** — it is in `.gitignore`. Use environment secrets in your CI/CD system.
 - The Podman and Docker setups run as a **non-root user** inside the container.
-- The Quadlet unit can be hardened with `NoNewPrivileges=true` and `ReadOnlyRootfs=true`.
 - The systemd unit uses `NoNewPrivileges`, `PrivateTmp`, and `ProtectSystem=strict`.
-- All admin commands (`/points`, `/referrals`, `/catalogue-members`, `/backup-db`, `/setup`) require the **Administrator** Discord permission. Do not grant the bot itself Administrator — see the exact permission list in the portal setup section.
+- Admin commands are gated by `ADMIN_ROLE_ID`. The role should be assigned only to trusted staff. If `ADMIN_ROLE_ID` is not set, the bot falls back to requiring the Discord **Administrator** permission.
 - The bot **never assigns Discord roles**. It only reads role events. This limits blast radius if the bot token is ever compromised.
+- All point adjustments made via the debug panel are logged to the log channel with the admin's user ID.

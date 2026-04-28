@@ -45,7 +45,7 @@ module.exports = {
     if (ambiguous || !usedCode) {
       db.upsertMember(member.id, { referrer_id: null });
       await log(client, 'warn',
-        `⚠️ Could not determine invite code for new member \`${member.id}\`. Catalogued with no referrer. Manual review may be needed.`
+        `Could not determine invite code for new member \`${member.id}\`. Catalogued with no referrer. Manual review may be needed.`
       );
       return;
     }
@@ -53,7 +53,7 @@ module.exports = {
     // ── Self-referral check ───────────────────────────────────────────────────
     if (inviteRow && inviteRow.created_by_id === member.id) {
       await log(client, 'warn',
-        `⚠️ Self-referral attempt detected: \`${member.id}\` tried to join using their own invite code \`${usedCode}\`. No action taken.`
+        `Self-referral attempt detected: \`${member.id}\` tried to join using their own invite code \`${usedCode}\`. No action taken.`
       );
       return;
     }
@@ -75,7 +75,7 @@ module.exports = {
     // truly unowned bot-created invites.
     if (inviteRow.created_by_bot) {
       await log(client, 'warn',
-        `⚠️ Member \`${member.id}\` joined via bot-created invite \`${usedCode}\` but no referral button owner is on record. No points awarded.`
+        `Member \`${member.id}\` joined via bot-created invite \`${usedCode}\` but no referral button owner is on record. No points awarded.`
       );
       return;
     }
@@ -87,13 +87,13 @@ module.exports = {
     const confirmedReferrer = db.getReferrer(member.id);
 
     if (!confirmedReferrer) {
-      await log(client, 'warn', `⚠️ No referrer resolved for \`${member.id}\` after cataloguing — skipping point award.`);
+      await log(client, 'warn', `No referrer resolved for \`${member.id}\` after cataloguing — skipping point award.`);
       return;
     }
 
     if (confirmedReferrer !== inviteRow.created_by_id) {
       await log(client, 'warn',
-        `⚠️ Referrer mismatch for \`${member.id}\`: invite says \`${inviteRow.created_by_id}\`, getReferrer returned \`${confirmedReferrer}\`. No points awarded.`
+        `Referrer mismatch for \`${member.id}\`: invite says \`${inviteRow.created_by_id}\`, getReferrer returned \`${confirmedReferrer}\`. No points awarded.`
       );
       return;
     }
@@ -103,7 +103,7 @@ module.exports = {
     db.upsertMember(member.id, { joined: 1 });
 
     await log(client, 'success',
-      `✅ Member \`${member.id}\` joined via \`${usedCode}\` — referrer \`${confirmedReferrer}\` awarded 1 point (total: **${newTotal}**).`
+      `Member \`${member.id}\` joined via \`${usedCode}\` — referrer \`${confirmedReferrer}\` awarded 1 point (total: **${newTotal}**).`
     );
   },
 };

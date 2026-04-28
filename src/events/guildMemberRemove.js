@@ -14,6 +14,6 @@ module.exports = {
     db.recordLeave(member.id);
     db.upsertMember(member.id, { has_left: 1 });
 
-    await log(client, 'leave', `📤 Member \`${member.id}\` (${member.user.tag}) left the server.`);
+    await log(client, 'leave', `Member \`${member.id}\` (${member.user.tag}) left the server.`);
   },
 };

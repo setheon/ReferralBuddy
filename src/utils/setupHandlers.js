@@ -73,11 +73,28 @@ async function handleSetupButton(interaction, client) {
 
     const panelEmbed = new EmbedBuilder()
       .setColor(0x5865F2)
-      .setTitle('🔗  Get Your Referral Link')
-      .setDescription(
-        'Click the button below to receive your **personal invite link** via DM.\n' +
-        'Share it with friends — every milestone they reach earns you points!'
-      )
+      .setTitle('🔗  VILTROX REFERRAL BUDDY')
+      .setDescription([
+        '# REFER YOUR FRIENDS TO THE VILTROX COMMUNITY TO UNLOCK EXCLUSIVE REWARDS!',
+        '',
+        '**Click the button below to receive your personal invite link.**',
+        'Share it with your photography friends — every milestone they hit in the community earns you points.',
+        '',
+        '**── Point Milestones ──**',
+        '> 📥 **Friend joins the server & reaches 25 XP Points (Freshman Role)**',
+        '> `→ +1 pt`',
+        '> 2️⃣ **Friend reaches 500 XP Points (Frequent Chatter Role)**',
+        '> `→ +5 pts`',
+        '> 3️⃣ **Friend reaches 1,000 XP Points (Active Contributor)**',
+        '> `→ +10 pts`',
+        '> 4️⃣ **Friend reaches 10,000 XP Points (Viltrox Elite)**',
+        '> `→ +100 pts`',
+        '',
+        '**── Rewards ──**',
+        'Accumulate points to unlock exclusive rewards!',
+        'Use `/stats` to check your current standing.',
+      ].join('\n'))
+      .setImage('https://media.discordapp.net/attachments/1491698407830720694/1491784039235977346/viltrox.png?ex=69f005e6&is=69eeb466&hm=8b43f44f666c66b60ab1e89b5c8843bcccad0e409cc0061861b33b14a73f52d6&=&format=webp&quality=lossless')
       .setFooter({ text: 'Your link is unique — do not share it with bots' });
 
     const panelRow = new ActionRowBuilder().addComponents(

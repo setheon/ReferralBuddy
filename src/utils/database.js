@@ -200,9 +200,51 @@ function setPoints(userId, value, reason = 'admin_set') {
   return clamped;
 }
 
+/**
+ * Returns the user's 1-based all-time rank (by points).
+ * Users with more points than this user = rank - 1.
+ */
+function getRank(userId) {
+  const row = getDb().prepare(`
+    SELECT COUNT(*) + 1 AS rank
+    FROM   referral_points
+    WHERE  points > COALESCE((SELECT points FROM referral_points WHERE user_id = ?), -1)
+  `).get(userId);
+  return row?.rank ?? 1;
+}
+
 /** All-time leaderboard — reads the running total. */
 function getLeaderboard(limit = 10) {
   return getDb().prepare('SELECT user_id, points FROM referral_points ORDER BY points DESC LIMIT ?').all(limit);
+}
+
+/**
+ * Top inviters by join count.
+ * All-time reads guild_members (includes pre-ledger history).
+ * Period reads point_ledger with reason = 'join'.
+ */
+function getTopInviters(limit = 10, since = null, until = null) {
+  if (!since) {
+    // All-time: use guild_members for full historical accuracy
+    return getDb().prepare(`
+      SELECT referrer_id AS user_id, COUNT(*) AS join_count
+      FROM   guild_members
+      WHERE  referrer_id IS NOT NULL
+      GROUP  BY referrer_id
+      ORDER  BY join_count DESC
+      LIMIT  ?
+    `).all(limit);
+  }
+
+  const untilStr = until ?? new Date().toISOString().replace('T', ' ').slice(0, 19);
+  return getDb().prepare(`
+    SELECT user_id, COUNT(*) AS join_count
+    FROM   point_ledger
+    WHERE  reason = 'join' AND earned_at >= ? AND earned_at <= ?
+    GROUP  BY user_id
+    ORDER  BY join_count DESC
+    LIMIT  ?
+  `).all(since, untilStr, limit);
 }
 
 /**
@@ -325,6 +367,16 @@ function upsertCooldown(userId) {
   `).run(userId);
 }
 
+/** Wipes all referral button cooldowns. Returns the number of rows deleted. */
+function clearCooldowns() {
+  return getDb().prepare('DELETE FROM referral_button_cooldowns').run().changes;
+}
+
+/** Returns every row from bot_config. */
+function getAllConfig() {
+  return getDb().prepare('SELECT key, value FROM bot_config ORDER BY key').all();
+}
+
 // ─── Backup log ───────────────────────────────────────────────────────────────
 
 function insertBackupLog(filename) {
@@ -352,7 +404,7 @@ module.exports = {
   // Invite codes
   upsertInviteCode, syncInviteCode, getInviteCode, getInviteCodesByUser,
   // Points
-  getPoints, addPoints, setPoints, getLeaderboard, getLeaderboardByPeriod,
+  getPoints, addPoints, setPoints, getRank, getLeaderboard, getLeaderboardByPeriod, getTopInviters,
   // Guild members
   getMember, upsertMember, getMembersByReferrer, setMemberReferrer,
   // Left members
@@ -361,7 +413,9 @@ module.exports = {
   getRoleReward, listRoleRewards, upsertRoleReward, deleteRoleReward,
   hasRoleRewardLog, insertRoleRewardLog,
   // Cooldowns
-  getCooldown, upsertCooldown,
+  getCooldown, upsertCooldown, clearCooldowns,
+  // Config (all)
+  getAllConfig,
   // Backup log
   insertBackupLog, getBackupLogs, deleteBackupLog,
 };
