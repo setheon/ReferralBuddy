@@ -1,5 +1,7 @@
 # 🔗 ReferralBuddy
 
+![ReferralBuddy Banner](https://media.discordapp.net/attachments/1491698407830720694/1498616539274805379/Referralbuddy_banner_02.png?ex=69f1cee9&is=69f07d69&hm=d6f6d620b54779c226573435bde365861476902a2c0508b2e12fa527b31e3f43&=&format=webp&quality=lossless&width=1672&height=941)
+
 A Discord referral tracking bot. Members click a button to receive their personal invite link via DM, earn points when referrals join and hit milestones, and admins get full visibility into attribution — all logged to a dedicated channel in real time.
 
 ---
@@ -300,7 +302,7 @@ Shows your own referral stats as a private embed:
 
 ---
 
-#### `/points leaderboard [period] [start] [end]`
+#### `/leaderboard [period] [start] [end]`
 *Available to everyone — posts publicly in channel*
 
 Two-column leaderboard embed showing **Top Inviters** (by join count) and **Top Earners** (by points).
@@ -319,7 +321,7 @@ When a period is specified, both columns reflect that same period.
 
 > All admin commands require the role set in `ADMIN_ROLE_ID`.
 
-#### `/points check user:@User`
+#### `/points user:@User`
 
 Displays a user's current point total and who referred them.
 
@@ -683,7 +685,7 @@ SQLite database at `DB_PATH` (default: `./data/referralbuddy.db`). All timestamp
 **Slash commands don't appear in Discord**
 - Run `npm run deploy` to register them.
 - With `GUILD_ID`: instant. Without `GUILD_ID` (global): up to 1 hour.
-- Commands are visible to all members but only executable by holders of `ADMIN_ROLE_ID` (except `/stats` and `/points leaderboard`, which are public).
+- Commands are visible to all members but only executable by holders of `ADMIN_ROLE_ID` (except `/stats` and `/leaderboard`, which are public).
 
 **Log channel not receiving messages**
 - Run **Debug → Test All Logs** to fire a test message of every log type.

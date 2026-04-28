@@ -20,6 +20,12 @@ async function buildSetupEmbed(guild) {
     ? rewards.map(r => `• <@&${r.role_id}> → **${r.points_awarded}** pt(s)`).join('\n')
     : '*None configured*';
 
+  const joinEnabled = db.getConfig('join_points_enabled') !== '0';
+  const joinValue   = db.getConfig('join_points_value') ?? '1';
+  const joinText    = joinEnabled
+    ? `✅ Enabled — **${joinValue}** pt(s) per join`
+    : `❌ Disabled`;
+
   return new EmbedBuilder()
     .setColor(0x5865F2)
     .setTitle('🛠️  ReferralBuddy Setup')
@@ -27,7 +33,8 @@ async function buildSetupEmbed(guild) {
       { name: '📋 Log Channel',      value: logText,      inline: true },
       { name: '🔗 Referral Channel', value: referralText, inline: true },
       { name: '​',              value: '​',     inline: true },
-      { name: '🏆 Milestone Roles',  value: rewardLines },
+      { name: '🎯 Join Points',      value: joinText,     inline: false },
+      { name: '🏆 Milestone Roles',  value: rewardLines,  inline: false },
     )
     .setFooter({ text: 'Use the buttons below to configure the bot' })
     .setTimestamp();
@@ -53,6 +60,11 @@ function buildSetupRows() {
   );
 
   const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('setup_btn_join_points')
+      .setLabel('Join Points')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🎯'),
     new ButtonBuilder()
       .setCustomId('setup_btn_add_milestone')
       .setLabel('Add Milestone Role')

@@ -1,7 +1,8 @@
 'use strict';
 
-const { log }                  = require('../utils/logger');
-const { handleReferralButton } = require('../utils/referralButton');
+const { log }                      = require('../utils/logger');
+const { handleReferralButton }     = require('../utils/referralButton');
+const { handleFetchInvitesButton } = require('../utils/inviteInfoHandler');
 const {
   handleSetupButton,
   handleSetupSelect,
@@ -57,6 +58,19 @@ module.exports = {
           console.error('[BUTTON ERROR] referral_get_link:', err);
           await log(client, 'error', `Referral button error for \`${interaction.user.id}\`: ${err.message}`);
           const p = { content: '❌ Could not create your link. Please try again.', flags: 1 << 6 };
+          if (interaction.deferred || interaction.replied) await interaction.followUp(p).catch(() => {});
+          else await interaction.reply(p).catch(() => {});
+        }
+        return;
+      }
+
+      if (interaction.customId.startsWith('referrals_fetch_invites:')) {
+        try {
+          await handleFetchInvitesButton(interaction, client);
+        } catch (err) {
+          console.error('[BUTTON ERROR] fetch_invites:', err);
+          await log(client, 'error', `Fetch invites error: ${err.message}`);
+          const p = { content: '❌ Could not fetch invite data.', flags: 1 << 6 };
           if (interaction.deferred || interaction.replied) await interaction.followUp(p).catch(() => {});
           else await interaction.reply(p).catch(() => {});
         }

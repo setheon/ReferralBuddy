@@ -114,6 +114,85 @@ async function handleSetupButton(interaction, client) {
     });
   }
 
+  // ── Join Points sub-panel ────────────────────────────────────────────────────
+  if (id === 'setup_btn_join_points') {
+    const enabled   = db.getConfig('join_points_enabled') !== '0';
+    const value     = db.getConfig('join_points_value') ?? '1';
+    const statusTxt = enabled
+      ? `✅ Currently **enabled** — **${value}** pt(s) awarded per join`
+      : `❌ Currently **disabled** — no points awarded on join`;
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('setup_join_enable')
+        .setLabel('Enable')
+        .setStyle(enabled ? ButtonStyle.Secondary : ButtonStyle.Success)
+        .setEmoji('✅')
+        .setDisabled(enabled),
+      new ButtonBuilder()
+        .setCustomId('setup_join_disable')
+        .setLabel('Disable')
+        .setStyle(enabled ? ButtonStyle.Danger : ButtonStyle.Secondary)
+        .setEmoji('❌')
+        .setDisabled(!enabled),
+      new ButtonBuilder()
+        .setCustomId('setup_join_customise')
+        .setLabel('Customise Join Point(s)')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('🔢'),
+    );
+
+    return interaction.reply({
+      content: `**🎯 Join Points**\n${statusTxt}`,
+      components: [row],
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Join Points: Enable ──────────────────────────────────────────────────────
+  if (id === 'setup_join_enable') {
+    db.setConfig('join_points_enabled', '1');
+    const value = db.getConfig('join_points_value') ?? '1';
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` enabled join points (**${value}** pt(s) per join).`);
+    return interaction.update({
+      content: `✅ Join points **enabled** — referrers now earn **${value}** pt(s) when their invitee joins.`,
+      components: [],
+    });
+  }
+
+  // ── Join Points: Disable ─────────────────────────────────────────────────────
+  if (id === 'setup_join_disable') {
+    db.setConfig('join_points_enabled', '0');
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` disabled join points.`);
+    return interaction.update({
+      content: `❌ Join points **disabled** — no points will be awarded when a referral joins.`,
+      components: [],
+    });
+  }
+
+  // ── Join Points: Customise → modal ───────────────────────────────────────────
+  if (id === 'setup_join_customise') {
+    const current = db.getConfig('join_points_value') ?? '1';
+    const modal = new ModalBuilder()
+      .setCustomId('setup_modal_join_points')
+      .setTitle('Customise Join Points');
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('points_input')
+          .setLabel('Points awarded to referrer on join')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('e.g. 5')
+          .setValue(current)
+          .setRequired(true)
+          .setMaxLength(4),
+      ),
+    );
+
+    return interaction.showModal(modal);
+  }
+
   // ── Add Milestone Role ───────────────────────────────────────────────────────
   if (id === 'setup_btn_add_milestone') {
     const modal = new ModalBuilder()
@@ -196,6 +275,26 @@ async function handleSetupSelect(interaction, client) {
 async function handleSetupModal(interaction, client) {
   if (!isAuthorized(interaction.member)) return denyUnauthorized(interaction);
 
+  // ── Customise Join Points ────────────────────────────────────────────────────
+  if (interaction.customId === 'setup_modal_join_points') {
+    const raw    = interaction.fields.getTextInputValue('points_input').trim();
+    const points = parseInt(raw, 10);
+
+    if (isNaN(points) || points < 1) {
+      return interaction.reply({ content: '❌ Points must be a positive whole number.', flags: 1 << 6 });
+    }
+
+    db.setConfig('join_points_value', String(points));
+    await log(client, 'admin',
+      `Admin \`${interaction.user.id}\` set join points to **${points}** pt(s) per join.`
+    );
+
+    return interaction.reply({
+      content: `✅ Join points updated — referrers will now earn **${points}** pt(s) when their invitee joins.`,
+      flags: 1 << 6,
+    });
+  }
+
   // ── Add Milestone Role ───────────────────────────────────────────────────────
   if (interaction.customId === 'setup_modal_add_milestone') {
     const roleRaw   = interaction.fields.getTextInputValue('role_input').trim();
@@ -276,6 +375,10 @@ const SETUP_BUTTON_IDS = new Set([
   'setup_btn_log_channel',
   'setup_btn_referral_channel',
   'setup_btn_post_panel',
+  'setup_btn_join_points',
+  'setup_join_enable',
+  'setup_join_disable',
+  'setup_join_customise',
   'setup_btn_add_milestone',
   'setup_btn_remove_milestone',
 ]);
@@ -286,6 +389,7 @@ const SETUP_SELECT_IDS = new Set([
 ]);
 
 const SETUP_MODAL_IDS = new Set([
+  'setup_modal_join_points',
   'setup_modal_add_milestone',
   'setup_modal_remove_milestone',
 ]);

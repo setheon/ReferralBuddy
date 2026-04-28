@@ -12,6 +12,7 @@ const { isAuthorized, denyUnauthorized } = require('./auth');
 const { runBackup }                      = require('./backup');
 const inviteCache                        = require('./inviteCache');
 const { buildDebugEmbed, buildDebugRows, formatUptime } = require('../commands/debug');
+const { buildReferralReply }             = require('./inviteInfoHandler');
 
 // ─── Button handlers ──────────────────────────────────────────────────────────
 
@@ -351,35 +352,9 @@ async function handleDebugModal(interaction, client) {
 
   // ── Check Referrals ───────────────────────────────────────────────────────
   if (id === 'debug_modal_check_referrals') {
-    const userId  = interaction.fields.getTextInputValue('user_input').trim().replace(/[<@!>]/g, '');
-    const codes   = db.getInviteCodesByUser(userId);
-    const members = db.getMembersByReferrer(userId);
-    const user    = await client.users.fetch(userId).catch(() => null);
-    const name    = user ? user.tag : `\`${userId}\``;
-
-    let referredText = '*Nobody yet.*';
-    if (members.length) {
-      const lines = await Promise.all(members.map(async m => {
-        const u = await client.users.fetch(m.user_id).catch(() => null);
-        return u ? `• ${u.tag} (\`${m.user_id}\`)` : `• \`${m.user_id}\``;
-      }));
-      referredText = lines.join('\n');
-    }
-
-    return interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle(`👥  Referrals — ${name}`)
-          .addFields(
-            { name: 'Invite Codes',     value: `**${codes.length}** code(s)`,    inline: true },
-            { name: 'People Referred',  value: `**${members.length}** member(s)`, inline: true },
-            { name: 'Referred Members', value: referredText,                       inline: false },
-          )
-          .setTimestamp(),
-      ],
-      flags: 1 << 6,
-    });
+    const userId = interaction.fields.getTextInputValue('user_input').trim().replace(/[<@!>]/g, '');
+    const reply  = await buildReferralReply(userId, client);
+    return interaction.reply({ ...reply, flags: 1 << 6 });
   }
 
   // ── Adjust Points ─────────────────────────────────────────────────────────

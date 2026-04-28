@@ -98,12 +98,23 @@ module.exports = {
       return;
     }
 
-    // ── Award point ───────────────────────────────────────────────────────────
-    const newTotal = db.addPoints(confirmedReferrer, 1, 'join');
+    // ── Award join point(s) ───────────────────────────────────────────────────
+    const joinEnabled = db.getConfig('join_points_enabled') !== '0'; // default ON
+    const joinValue   = Math.max(1, parseInt(db.getConfig('join_points_value') ?? '1', 10));
+
     db.upsertMember(member.id, { joined: 1 });
 
+    if (!joinEnabled) {
+      await log(client, 'info',
+        `Member \`${member.id}\` joined via \`${usedCode}\` — join points are disabled, no points awarded to \`${confirmedReferrer}\`.`
+      );
+      return;
+    }
+
+    const newTotal = db.addPoints(confirmedReferrer, joinValue, 'join');
+
     await log(client, 'success',
-      `Member \`${member.id}\` joined via \`${usedCode}\` — referrer \`${confirmedReferrer}\` awarded 1 point (total: **${newTotal}**).`
+      `Member \`${member.id}\` joined via \`${usedCode}\` — referrer \`${confirmedReferrer}\` awarded **${joinValue}** point(s) (total: **${newTotal}**).`
     );
   },
 };
