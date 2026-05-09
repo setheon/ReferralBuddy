@@ -118,10 +118,23 @@ async function handleSetupButton(interaction, client) {
         .setCustomId('referral_get_link')
         .setLabel('Get My Referral Link')
         .setStyle(ButtonStyle.Success)
-        .setEmoji('🔗')
+        .setEmoji('🔗'),
     );
 
-    await channel.send({ embeds: [bannerEmbed, panelEmbed], components: [panelRow] });
+    const infoRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('referral_btn_leaderboard')
+        .setLabel('Leaderboard')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('🏆'),
+      new ButtonBuilder()
+        .setCustomId('referral_btn_stats')
+        .setLabel('My Stats')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('📊'),
+    );
+
+    await channel.send({ embeds: [bannerEmbed, panelEmbed], components: [panelRow, infoRow] });
     await log(client, 'admin', `Admin \`${interaction.user.id}\` posted the referral panel in <#${channelId}>.`);
 
     return interaction.followUp({

@@ -4,6 +4,11 @@ const { log }                      = require('../utils/logger');
 const { handleReferralButton }     = require('../utils/referralButton');
 const { handleFetchInvitesButton } = require('../utils/inviteInfoHandler');
 const {
+  handleLeaderboardButton,
+  handleStatsButton,
+  isPanelButton,
+} = require('../utils/panelButtonHandlers');
+const {
   handleSetupButton,
   handleSetupSelect,
   handleSetupModal,
@@ -52,6 +57,23 @@ module.exports = {
 
     // ── Button interactions ───────────────────────────────────────────────────
     if (interaction.isButton()) {
+
+      if (isPanelButton(interaction.customId)) {
+        try {
+          if (interaction.customId === 'referral_btn_leaderboard') {
+            await handleLeaderboardButton(interaction, client);
+          } else {
+            await handleStatsButton(interaction, client);
+          }
+        } catch (err) {
+          console.error('[BUTTON ERROR] panel:', err);
+          await log(client, 'error', `Panel button error \`${interaction.customId}\`: ${err.message}`);
+          const p = { content: '❌ Something went wrong. Please try again.', flags: 1 << 6 };
+          if (interaction.deferred || interaction.replied) await interaction.followUp(p).catch(() => {});
+          else await interaction.reply(p).catch(() => {});
+        }
+        return;
+      }
 
       if (interaction.customId === 'referral_get_link') {
         try {
