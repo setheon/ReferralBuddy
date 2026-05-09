@@ -60,11 +60,15 @@ async function handleReferralButton(interaction, client) {
     }
   }
 
+  // ── Lock the cooldown BEFORE the first await ──────────────────────────────
+  // Node.js is single-threaded but yields at every `await`. If we set the
+  // cooldown only after deferReply(), a second button click that arrives in
+  // the gap would also pass the cooldown check, producing duplicate links.
+  // Setting it here (synchronously, before any async work) makes it atomic.
+  db.upsertCooldown(member.id);
+
   // ── Defer immediately — all subsequent work is async ─────────────────────
   await interaction.deferReply({ flags: 1 << 6 });
-
-  // Update cooldown now that we're committed to generating
-  db.upsertCooldown(member.id);
 
   // ── Sync any existing Discord invites this member owns into the DB ────────
   try {
