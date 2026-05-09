@@ -28,6 +28,15 @@ module.exports = {
         continue;
       }
 
+      // Guard: never award points to a bot referrer
+      const referrerUser = await client.users.fetch(referrerId).catch(() => null);
+      if (referrerUser?.bot) {
+        await log(client, 'warn',
+          `Role reward triggered for \`${newMember.id}\` (role \`${roleId}\`) but referrer \`${referrerId}\` is a bot — no points awarded.`
+        );
+        continue;
+      }
+
       const newTotal = db.addPoints(referrerId, reward.points_awarded, 'milestone_role');
       db.insertRoleRewardLog(newMember.id, roleId);
 

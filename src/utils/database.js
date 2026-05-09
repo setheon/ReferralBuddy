@@ -35,6 +35,7 @@ function _initSchema() {
       code           TEXT PRIMARY KEY,
       created_by_id  TEXT,
       created_by_bot INTEGER NOT NULL DEFAULT 0,
+      existing_link  INTEGER NOT NULL DEFAULT 0,
       added_at       TEXT    NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -76,6 +77,16 @@ function _initSchema() {
       filename  TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS invite_channels (
+      channel_id TEXT PRIMARY KEY,
+      added_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS advert_channels (
+      channel_id TEXT PRIMARY KEY,
+      added_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS point_ledger (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id   TEXT    NOT NULL,
@@ -87,6 +98,15 @@ function _initSchema() {
     CREATE INDEX IF NOT EXISTS idx_pl_user   ON point_ledger(user_id);
     CREATE INDEX IF NOT EXISTS idx_pl_earned ON point_ledger(earned_at);
   `);
+
+  // ── Migrations ───────────────────────────────────────────────────────────────
+  // Add existing_link column to invite_codes if not already present
+  try {
+    getDb().exec(`ALTER TABLE invite_codes ADD COLUMN existing_link INTEGER NOT NULL DEFAULT 0`);
+  } catch (_) { /* column already exists — no-op */ }
+
+  // Add invite_channels table if not already present (covered by CREATE TABLE IF NOT EXISTS above,
+  // but kept here as a comment anchor for future migrations)
 }
 
 // ─── Bot config ───────────────────────────────────────────────────────────────
@@ -123,6 +143,7 @@ function upsertInviteCode(code, createdById, createdByBot) {
     ON CONFLICT(code) DO UPDATE SET
       created_by_id  = excluded.created_by_id,
       created_by_bot = excluded.created_by_bot
+      -- existing_link intentionally not touched here
   `).run(code, createdById ?? null, createdByBot ? 1 : 0);
 }
 
@@ -158,6 +179,73 @@ function getInviteCode(code) {
 
 function getInviteCodesByUser(userId) {
   return getDb().prepare('SELECT * FROM invite_codes WHERE created_by_id = ?').all(userId);
+}
+
+/**
+ * Returns the most recently added invite code row that has been marked as the
+ * user's permanent referral link (existing_link = 1), or null if none exists.
+ */
+function getExistingLinkCode(userId) {
+  return getDb().prepare(`
+    SELECT * FROM invite_codes
+    WHERE created_by_id = ? AND existing_link = 1 AND created_by_bot = 0
+    ORDER BY added_at DESC
+    LIMIT 1
+  `).get(userId) ?? null;
+}
+
+/** Marks a specific invite code as the owner's permanent referral link. */
+function markExistingLink(code) {
+  getDb().prepare(`
+    UPDATE invite_codes SET existing_link = 1 WHERE code = ?
+  `).run(code);
+}
+
+/** Hard-deletes an invite code from the database (used during purge). */
+function deleteInviteCode(code) {
+  getDb().prepare('DELETE FROM invite_codes WHERE code = ?').run(code);
+}
+
+/**
+ * Returns all invite codes added more than `days` days ago.
+ * Used by the purge routine to find candidates for cleanup.
+ */
+function getOldInviteCodes(days) {
+  return getDb().prepare(`
+    SELECT * FROM invite_codes
+    WHERE added_at <= datetime('now', ? || ' days')
+  `).all(`-${days}`);
+}
+
+// ─── Invite channels ──────────────────────────────────────────────────────────
+
+function addInviteChannel(channelId) {
+  getDb().prepare(`
+    INSERT OR IGNORE INTO invite_channels (channel_id) VALUES (?)
+  `).run(channelId);
+}
+
+function removeInviteChannel(channelId) {
+  getDb().prepare('DELETE FROM invite_channels WHERE channel_id = ?').run(channelId);
+}
+
+/** Returns all configured invite channels ordered oldest-first (highest priority first). */
+function listInviteChannels() {
+  return getDb().prepare('SELECT * FROM invite_channels ORDER BY added_at ASC').all();
+}
+
+// ─── Advert channels ──────────────────────────────────────────────────────────
+
+function addAdvertChannel(channelId) {
+  getDb().prepare('INSERT OR IGNORE INTO advert_channels (channel_id) VALUES (?)').run(channelId);
+}
+
+function removeAdvertChannel(channelId) {
+  getDb().prepare('DELETE FROM advert_channels WHERE channel_id = ?').run(channelId);
+}
+
+function listAdvertChannels() {
+  return getDb().prepare('SELECT * FROM advert_channels ORDER BY added_at ASC').all();
 }
 
 // ─── Referral points ──────────────────────────────────────────────────────────
@@ -213,9 +301,9 @@ function getRank(userId) {
   return row?.rank ?? 1;
 }
 
-/** All-time leaderboard — reads the running total. */
+/** All-time leaderboard — reads the running total. Excludes zero-scorers. */
 function getLeaderboard(limit = 10) {
-  return getDb().prepare('SELECT user_id, points FROM referral_points ORDER BY points DESC LIMIT ?').all(limit);
+  return getDb().prepare('SELECT user_id, points FROM referral_points WHERE points > 0 ORDER BY points DESC LIMIT ?').all(limit);
 }
 
 /**
@@ -403,6 +491,11 @@ module.exports = {
   getReferrer,
   // Invite codes
   upsertInviteCode, syncInviteCode, getInviteCode, getInviteCodesByUser,
+  getExistingLinkCode, markExistingLink, deleteInviteCode, getOldInviteCodes,
+  // Invite channels
+  addInviteChannel, removeInviteChannel, listInviteChannels,
+  // Advert channels
+  addAdvertChannel, removeAdvertChannel, listAdvertChannels,
   // Points
   getPoints, addPoints, setPoints, getRank, getLeaderboard, getLeaderboardByPeriod, getTopInviters,
   // Guild members

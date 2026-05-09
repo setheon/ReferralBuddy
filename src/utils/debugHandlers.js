@@ -13,6 +13,9 @@ const { runBackup }                      = require('./backup');
 const inviteCache                        = require('./inviteCache');
 const { buildDebugEmbed, buildDebugRows, formatUptime } = require('../commands/debug');
 const { buildReferralReply }             = require('./inviteInfoHandler');
+const { purgeUnusedInvites }             = require('./invitePurge');
+const { forcePost, runAdvertCycle, restartAdvert, activeTimerCount } = require('./advertManager');
+const { ChannelSelectMenuBuilder, ChannelType } = require('discord.js');
 
 // ─── Button handlers ──────────────────────────────────────────────────────────
 
@@ -144,9 +147,9 @@ async function handleDebugButton(interaction, client) {
           new ActionRowBuilder().addComponents(
             new TextInputBuilder()
               .setCustomId('amount_input')
-              .setLabel('Amount (positive to add, negative to subtract)')
+              .setLabel('New point total')
               .setStyle(TextInputStyle.Short)
-              .setPlaceholder('e.g. 10 or -5')
+              .setPlaceholder('e.g. 25')
               .setRequired(true),
           ),
         ),
@@ -311,6 +314,82 @@ async function handleDebugButton(interaction, client) {
 
     return interaction.followUp({ embeds: [embed], flags: 1 << 6 });
   }
+
+  // ── Force Post All Advert Channels ───────────────────────────────────────
+  if (id === 'debug_btn_advert_force_all') {
+    await interaction.deferUpdate();
+
+    const channels = db.listAdvertChannels();
+    if (!channels.length) {
+      return interaction.followUp({ content: '❌ No advert channels configured.', flags: 1 << 6 });
+    }
+
+    let posted = 0, failed = 0;
+    for (const { channel_id } of channels) {
+      const ok = await forcePost(channel_id, client).catch(() => false);
+      if (ok) posted++; else failed++;
+    }
+
+    return interaction.followUp({
+      content: `📢 Force-posted advert in **${posted}** channel(s).${failed > 0 ? ` ⚠️ **${failed}** failed.` : ''}`,
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Force Post Custom Channel ─────────────────────────────────────────────
+  if (id === 'debug_btn_advert_force_custom') {
+    const select = new ChannelSelectMenuBuilder()
+      .setCustomId('debug_select_advert_custom')
+      .setPlaceholder('Select a channel to force-post the advert in')
+      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
+
+    return interaction.reply({
+      content: '**Select a channel to force-post the advert in:**',
+      components: [new ActionRowBuilder().addComponents(select)],
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Restart Advert Timers ─────────────────────────────────────────────────
+  if (id === 'debug_btn_advert_restart') {
+    await interaction.deferUpdate();
+
+    restartAdvert(client);
+    const hours   = db.getConfig('advert_interval_hours') ?? '1';
+    const enabled = db.getConfig('advert_enabled') !== '0';
+    const count   = activeTimerCount();
+
+    await log(client, 'admin',
+      `Admin \`${interaction.user.id}\` restarted advert timers (**${count}** active, every **${hours}** hour(s)).`
+    );
+
+    return interaction.followUp({
+      content: enabled
+        ? `♻️ Advert timers restarted — **${count}** active timer(s) running every **${hours}** hour(s).`
+        : `♻️ Advert timers restarted — advert is currently **disabled**, no timers started.`,
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Purge Unused Invites ──────────────────────────────────────────────────
+  if (id === 'debug_btn_purge_invites') {
+    await interaction.deferUpdate();
+
+    try {
+      const { purged, kept, errors } = await purgeUnusedInvites(interaction.guild, client);
+      return interaction.followUp({
+        content: [
+          `🗑️ Invite purge complete.`,
+          `• **${purged}** removed (0 uses, 15+ days old)`,
+          `• **${kept}** kept (have been used)`,
+          errors > 0 ? `• ⚠️ **${errors}** error(s) — check the log channel` : null,
+        ].filter(Boolean).join('\n'),
+        flags: 1 << 6,
+      });
+    } catch (err) {
+      return interaction.followUp({ content: `❌ Purge failed: ${err.message}`, flags: 1 << 6 });
+    }
+  }
 }
 
 // ─── Modal handlers ───────────────────────────────────────────────────────────
@@ -360,23 +439,23 @@ async function handleDebugModal(interaction, client) {
   // ── Adjust Points ─────────────────────────────────────────────────────────
   if (id === 'debug_modal_adjust_points') {
     const userId = interaction.fields.getTextInputValue('user_input').trim().replace(/[<@!>]/g, '');
-    const amount = parseInt(interaction.fields.getTextInputValue('amount_input').trim(), 10);
+    const value  = parseInt(interaction.fields.getTextInputValue('amount_input').trim(), 10);
 
-    if (isNaN(amount)) {
-      return interaction.reply({ content: '❌ Amount must be a valid integer.', flags: 1 << 6 });
+    if (isNaN(value) || value < 0) {
+      return interaction.reply({ content: '❌ Value must be a positive whole number.', flags: 1 << 6 });
     }
 
-    const newTotal = db.addPoints(userId, amount, 'admin_adjust');
-    const sign     = amount >= 0 ? '+' : '';
-    const user     = await client.users.fetch(userId).catch(() => null);
-    const name     = user ? `${user.tag} (<@${userId}>)` : `\`${userId}\``;
+    const previous = db.getPoints(userId);
+    const newTotal  = db.setPoints(userId, value, 'admin_adjust');
+    const user      = await client.users.fetch(userId).catch(() => null);
+    const name      = user ? `${user.tag} (<@${userId}>)` : `\`${userId}\``;
 
     await log(client, 'admin',
-      `Admin \`${interaction.user.id}\` adjusted \`${userId}\`'s points by **${sign}${amount}** (new total: **${newTotal}**).`
+      `Admin \`${interaction.user.id}\` set \`${userId}\`'s points to **${newTotal}** (was **${previous}**).`
     );
 
     return interaction.reply({
-      content: `✅ Adjusted ${name}'s points by **${sign}${amount}**. New total: **${newTotal}**.`,
+      content: `✅ ${name}'s points set to **${newTotal}** (was **${previous}**).`,
       flags: 1 << 6,
     });
   }
@@ -419,6 +498,10 @@ const DEBUG_BUTTON_IDS = new Set([
   'debug_btn_test_channel',
   'debug_btn_bot_status',
   'debug_btn_view_config',
+  'debug_btn_purge_invites',
+  'debug_btn_advert_force_all',
+  'debug_btn_advert_force_custom',
+  'debug_btn_advert_restart',
 ]);
 
 const DEBUG_MODAL_IDS = new Set([
@@ -428,7 +511,42 @@ const DEBUG_MODAL_IDS = new Set([
   'debug_modal_set_referrer',
 ]);
 
+const DEBUG_SELECT_IDS = new Set([
+  'debug_select_advert_custom',
+]);
+
 function isDebugButton(id) { return DEBUG_BUTTON_IDS.has(id); }
 function isDebugModal(id)  { return DEBUG_MODAL_IDS.has(id); }
+function isDebugSelect(id) { return DEBUG_SELECT_IDS.has(id); }
 
-module.exports = { handleDebugButton, handleDebugModal, isDebugButton, isDebugModal };
+// ─── Channel select handlers ──────────────────────────────────────────────────
+
+async function handleDebugSelect(interaction, client) {
+  if (!isAuthorized(interaction.member)) return denyUnauthorized(interaction);
+
+  const id = interaction.customId;
+
+  // ── Force Post Custom Channel ─────────────────────────────────────────────
+  if (id === 'debug_select_advert_custom') {
+    const channelId = interaction.values[0];
+    await interaction.deferUpdate();
+
+    const ok = await forcePost(channelId, client).catch(() => false);
+
+    return interaction.followUp({
+      content: ok
+        ? `📢 Advert force-posted in <#${channelId}>.`
+        : `❌ Failed to post advert in <#${channelId}>. Check the channel is accessible.`,
+      flags: 1 << 6,
+    });
+  }
+}
+
+module.exports = {
+  handleDebugButton,
+  handleDebugModal,
+  handleDebugSelect,
+  isDebugButton,
+  isDebugModal,
+  isDebugSelect,
+};

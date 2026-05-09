@@ -1,8 +1,9 @@
 'use strict';
 
-const db          = require('./database');
-const inviteCache = require('./inviteCache');
-const { log }     = require('./logger');
+const db                        = require('./database');
+const inviteCache               = require('./inviteCache');
+const { log }                   = require('./logger');
+const { findInviteChannel }     = require('./invitePurge');
 
 const COOLDOWN_HOURS = 1;
 
@@ -12,6 +13,34 @@ const COOLDOWN_HOURS = 1;
 async function handleReferralButton(interaction, client) {
   const member = interaction.member;
   const guild  = interaction.guild;
+
+  // ── Check for an existing permanent referral link (sync) ──────────────────
+  // If the member already has one marked in the DB, skip generation entirely.
+  const existingRow = db.getExistingLinkCode(member.id);
+
+  if (existingRow) {
+    await interaction.deferReply({ flags: 1 << 6 });
+
+    const existingUrl = `https://discord.gg/${existingRow.code}`;
+
+    // DM the existing link
+    let dmOk = false;
+    try {
+      await member.user.send(
+        `🔗 **Your referral link:**\n${existingUrl}\n\nShare it with friends — every milestone they reach earns you points!`
+      );
+      dmOk = true;
+    } catch (_) { /* DMs may be closed */ }
+
+    await interaction.editReply(
+      dmOk
+        ? `📨 You already have a referral link — it's been resent to your DMs!\n🔗 ${existingUrl}`
+        : `🔗 You already have a referral link: **${existingUrl}**\nShare it with friends to earn points!\n*(Enable DMs from server members to receive it there next time.)*`
+    );
+
+    await log(client, 'invite', `Member \`${member.id}\` retrieved their existing referral code \`${existingRow.code}\`.`);
+    return;
+  }
 
   // ── Rate limit check (sync — fast, safe to do before deferring) ──────────
   const cooldownRow = db.getCooldown(member.id);
@@ -31,15 +60,17 @@ async function handleReferralButton(interaction, client) {
   }
 
   // ── Defer immediately — all subsequent work is async ─────────────────────
-  // Discord requires a response within 3 s; deferring buys 15 minutes.
   await interaction.deferReply({ flags: 1 << 6 });
 
-  // Update cooldown now that we're committed
+  // Update cooldown now that we're committed to generating
   db.upsertCooldown(member.id);
 
   // ── Sync existing guild invites created by this member ────────────────────
+  // We fetch all guild invites once here and reuse the collection for channel
+  // selection — avoids a second API call inside findInviteChannel.
+  let existingInvites;
   try {
-    const existingInvites = await guild.invites.fetch();
+    existingInvites = await guild.invites.fetch();
     for (const [, inv] of existingInvites) {
       if (inv.inviter?.id === member.id) {
         db.upsertInviteCode(inv.code, member.id, false);
@@ -50,14 +81,13 @@ async function handleReferralButton(interaction, client) {
     return interaction.editReply('❌ Could not fetch server invites. Please try again.');
   }
 
-  // ── Resolve referral channel ──────────────────────────────────────────────
-  const channelId    = db.getConfig('referral_channel_id');
-  const targetChannel = channelId
-    ? await guild.channels.fetch(channelId).catch(() => null)
-    : guild.channels.cache.find(c => c.isTextBased() && guild.members.me.permissionsIn(c).has('CreateInstantInvite'));
+  // ── Resolve invite channel (with multi-channel rotation) ─────────────────
+  const targetChannel = await findInviteChannel(guild, existingInvites);
 
   if (!targetChannel) {
-    return interaction.editReply('❌ No referral channel configured. Ask an admin to run `/setup` first.');
+    return interaction.editReply(
+      '❌ No invite channel available. All configured channels are at capacity (50 invites each), or no referral channel has been set. Ask an admin to add a new invite channel via `/setup`.'
+    );
   }
 
   // ── Create a new personal referral invite ─────────────────────────────────
@@ -73,8 +103,9 @@ async function handleReferralButton(interaction, client) {
     return interaction.editReply(`❌ Failed to create invite: ${err.message}`);
   }
 
-  // Store the new code — created_by_id is the real member, NOT the bot
+  // Store the new code and mark it as this member's permanent referral link
   db.upsertInviteCode(invite.code, member.id, false);
+  db.markExistingLink(invite.code);
   inviteCache.set(invite.code, 0);
 
   // ── DM the link to the member ─────────────────────────────────────────────

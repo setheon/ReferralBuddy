@@ -4,6 +4,8 @@ const db           = require('../utils/database');
 const inviteCache  = require('../utils/inviteCache');
 const { log, consoleLog } = require('../utils/logger');
 const { runBackup } = require('../utils/backup');
+const { purgeUnusedInvites } = require('../utils/invitePurge');
+const { startAdvert } = require('../utils/advertManager');
 
 module.exports = {
   name: 'ready',
@@ -64,6 +66,30 @@ module.exports = {
       await runBackup(client);
     } catch (err) {
       consoleLog('error', `Startup backup failed: ${err.message}`);
+    }
+
+    // ── Purge unused invites (15+ days old, 0 uses) ───────────────────────────
+    for (const [, guild] of client.guilds.cache) {
+      try {
+        const { purged } = await purgeUnusedInvites(guild, client);
+        if (purged > 0) {
+          consoleLog('info', `Purged ${purged} unused invite(s) for ${guild.name}`);
+        }
+      } catch (err) {
+        consoleLog('error', `Invite purge failed for ${guild.name}: ${err.message}`);
+      }
+    }
+
+    // ── Start chat advert timers ──────────────────────────────────────────────
+    try {
+      startAdvert(client);
+      const enabled = db.getConfig('advert_enabled') !== '0';
+      const count   = db.listAdvertChannels().length;
+      if (enabled && count > 0) {
+        consoleLog('info', `Chat advert started — ${count} channel timer(s) active.`);
+      }
+    } catch (err) {
+      consoleLog('error', `Failed to start advert timers: ${err.message}`);
     }
   },
 };

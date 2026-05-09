@@ -2,21 +2,18 @@
 
 const { SlashCommandBuilder } = require('discord.js');
 const db = require('../utils/database');
-const { isAuthorized, denyUnauthorized } = require('../utils/auth');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('points')
-    .setDescription('Check a user\'s referral points and referrer')
+    .setDescription('Check a member\'s referral points and referrer')
     .addUserOption(o => o
       .setName('user')
-      .setDescription('User to check')
+      .setDescription('Member to check')
       .setRequired(true)
     ),
 
   async execute(interaction) {
-    if (!isAuthorized(interaction.member)) return denyUnauthorized(interaction);
-
     await interaction.deferReply({ flags: 1 << 6 }); // ephemeral
 
     const target     = interaction.options.getUser('user');

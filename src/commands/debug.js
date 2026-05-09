@@ -77,9 +77,16 @@ function buildDebugRows() {
     new ButtonBuilder().setCustomId('debug_btn_test_channel').setLabel('Test Referral Ch.').setStyle(ButtonStyle.Success).setEmoji('📢'),
     new ButtonBuilder().setCustomId('debug_btn_bot_status').setLabel('Bot Status').setStyle(ButtonStyle.Success).setEmoji('📊'),
     new ButtonBuilder().setCustomId('debug_btn_view_config').setLabel('View Config').setStyle(ButtonStyle.Secondary).setEmoji('⚙️'),
+    new ButtonBuilder().setCustomId('debug_btn_purge_invites').setLabel('Purge Unused Invites').setStyle(ButtonStyle.Danger).setEmoji('🗑️'),
   );
 
-  return [row1, row2, row3];
+  const row4 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('debug_btn_advert_force_all').setLabel('Force Post All Advert Channels').setStyle(ButtonStyle.Danger).setEmoji('📢'),
+    new ButtonBuilder().setCustomId('debug_btn_advert_force_custom').setLabel('Force Post Custom Channel').setStyle(ButtonStyle.Danger).setEmoji('🎯'),
+    new ButtonBuilder().setCustomId('debug_btn_advert_restart').setLabel('Restart Advert Timers').setStyle(ButtonStyle.Secondary).setEmoji('♻️'),
+  );
+
+  return [row1, row2, row3, row4];
 }
 
 // ─── Command ──────────────────────────────────────────────────────────────────

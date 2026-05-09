@@ -14,8 +14,10 @@ const {
 const {
   handleDebugButton,
   handleDebugModal,
+  handleDebugSelect,
   isDebugButton,
   isDebugModal,
+  isDebugSelect,
 } = require('../utils/debugHandlers');
 
 module.exports = {
@@ -112,6 +114,19 @@ module.exports = {
         } catch (err) {
           console.error('[SELECT ERROR] setup:', err);
           await log(client, 'error', `Setup select error \`${interaction.customId}\`: ${err.message}`);
+          const p = { content: '❌ Something went wrong.', flags: 1 << 6 };
+          if (interaction.deferred || interaction.replied) await interaction.followUp(p).catch(() => {});
+          else await interaction.reply(p).catch(() => {});
+        }
+        return;
+      }
+
+      if (isDebugSelect(interaction.customId)) {
+        try {
+          await handleDebugSelect(interaction, client);
+        } catch (err) {
+          console.error('[SELECT ERROR] debug:', err);
+          await log(client, 'error', `Debug select error \`${interaction.customId}\`: ${err.message}`);
           const p = { content: '❌ Something went wrong.', flags: 1 << 6 };
           if (interaction.deferred || interaction.replied) await interaction.followUp(p).catch(() => {});
           else await interaction.reply(p).catch(() => {});

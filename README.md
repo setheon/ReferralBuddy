@@ -32,14 +32,16 @@ A Discord referral tracking bot. Members click a button to receive their persona
 
 | Feature | Detail |
 |---|---|
-| **Personal referral links** | Members click "Get My Referral Link" to receive a unique, permanent invite link via DM. Rate-limited to once per hour. |
-| **Join tracking** | Diffs invite use-counts on every `guildMemberAdd` to determine which invite was used. Catalogues the joiner and awards the referrer 1 point. |
+| **Personal referral links** | Members click "Get My Referral Link" to receive their unique permanent invite link via DM. If they already have one, it is resent — no duplicate is ever created. |
+| **Join tracking** | Diffs invite use-counts on every `guildMemberAdd` to determine which invite was used. Catalogues the joiner and awards the referrer join points. |
 | **Self-referral protection** | Members cannot earn points from themselves — detected and blocked at join time. |
 | **Rejoin protection** | Points are only awarded once per (referrer, joiner) pair. Rejoining never re-awards a point. |
 | **Milestone roles** | When a referred member receives a configured role (e.g. from a levelling bot), their referrer earns the configured point value. |
 | **Point ledger** | Every point change is stamped with a UTC timestamp and reason (`join`, `milestone_role`, `admin_adjust`). Powers all period-based leaderboards. |
 | **Timed leaderboards** | Two-column public leaderboard (Top Inviters + Top Earners). Filter by Today, This Week, This Month, This Year, All Time, or a Custom date range. |
 | **Personal stats** | `/stats` shows any member their points, rank, referred members, and who referred them. |
+| **Invite channel pool** | Admins configure a pool of channels for invite creation. The bot cycles through them automatically, always picking the first channel with fewer than 50 active invites. Falls back to the referral channel if no pool is configured. |
+| **Auto-purge** | On every startup (and via the debug panel), invite codes that are 15+ days old with 0 uses are deleted from Discord, the database, and the in-memory cache — keeping the invite pool healthy. |
 | **Role-based auth** | Admin commands are gated by a configurable role ID (`ADMIN_ROLE_ID`), not Discord's Administrator permission, so visibility is not affected for non-admins. |
 | **Interactive panels** | `/setup` and `/debug` open embed panels with buttons — no subcommands to remember. |
 | **Database backups** | Auto-backup on every startup with 10-backup retention. Manual trigger in the debug panel. |
@@ -137,14 +139,21 @@ Friend B receives a role configured as a milestone role
 ```
 Member A presses "Get My Referral Link"
   │
+  ├─ Check invite_codes for existing_link = 1 (synchronous DB lookup)
+  │    └─ Found → defer → DM the existing link → reply "you already have one", stop.
+  │         (cooldown is bypassed — no new invite is created)
+  │
   ├─ Check referral_button_cooldowns (synchronous — before deferring)
   │    └─ Used within last hour? Reply with remaining cooldown, stop.
   │
   ├─ Defer interaction (acknowledges within 3 s, buys 15 min for async work)
   ├─ Update cooldown timestamp
   ├─ Fetch existing guild invites, upsert any of A's codes into invite_codes
-  ├─ Create new invite (maxAge=0, maxUses=0, unique=true)
-  ├─ Upsert new code: created_by_id = A.id, created_by_bot = false
+  ├─ findInviteChannel() — pick first configured invite channel with < 50 invites
+  │    └─ Falls back to referral_channel_id if no pool is configured
+  │    └─ Returns null if all channels are at capacity → error reply, stop
+  ├─ Create new invite in selected channel (maxAge=0, maxUses=0, unique=true)
+  ├─ Upsert new code: created_by_id = A.id, created_by_bot = false, existing_link = 1
   ├─ Update invite cache
   ├─ DM the invite URL to A
   └─ Reply ephemerally in the referral channel (fallback if DMs are closed)
@@ -173,6 +182,7 @@ Member B leaves the server
 3. Catalogue all human guild members (without overwriting existing data)
 4. Run automatic database backup
 5. Post startup summary to log channel
+6. Purge unused invites — delete codes that are 15+ days old with 0 uses from Discord, the DB, and the cache
 
 ---
 
@@ -269,10 +279,11 @@ npm start
 ### First-time setup order
 
 ```
-1. Click "Log Channel"      — select the channel where the bot posts logs
-2. Click "Referral Channel" — select the channel where the panel lives
-3. Click "Post Panel"       — posts the "Get My Referral Link" embed
-4. Click "Add Milestone Role" — (optional) configure role-based point rewards
+1. Click "Log Channel"         — select the channel where the bot posts logs
+2. Click "Referral Channel"    — select the channel where the panel lives
+3. Click "Post Panel"          — posts the "Get My Referral Link" embed
+4. Click "Add Milestone Role"  — (optional) configure role-based point rewards
+5. Click "Add Invite Channel"  — (optional) add overflow channels for invite creation
 ```
 
 ### Buttons
@@ -281,9 +292,13 @@ npm start
 |---|---|
 | 📋 **Log Channel** | Opens a channel picker. Saves immediately on selection. |
 | 🔗 **Referral Channel** | Opens a channel picker. Saves immediately on selection. |
-| 📢 **Post Panel** | Posts the referral panel embed (with "Get My Referral Link" button) into the configured referral channel. |
+| 📢 **Post Panel** | Posts the referral banner image followed by the referral embed (with the green "Get My Referral Link" button) into the configured referral channel. |
+| 🎯 **Join Points** | Opens a sub-panel with three buttons: ✅ Enable, ❌ Disable, and 🔢 Customise — to control whether and how many points are awarded when a referred member joins. |
 | ➕ **Add Milestone Role** | Opens a modal — type a role name or ID, then the points to award the referrer when any referred member receives that role. Supports servers with any number of roles. |
 | ➖ **Remove Milestone Role** | Opens a modal — type the role name or ID to remove. |
+| 🔀 **Add Invite Channel** | Opens a channel picker. Adds the selected channel to the invite pool. Invites are created here when earlier channels are at capacity. |
+| 🗑️ **Remove Invite Channel** | Opens a channel picker. Removes the selected channel from the invite pool. |
+| 📋 **View Invite Channels** | Lists all configured invite channels with the date each was added. |
 
 ---
 
@@ -291,8 +306,13 @@ npm start
 
 ### Public Commands
 
+#### `/help`
+
+Shows a summary of all public commands. Ephemeral (only visible to you).
+
+---
+
 #### `/stats`
-*Available to everyone*
 
 Shows your own referral stats as a private embed:
 - ⭐ Total points and all-time rank (with medal for top 3)
@@ -302,8 +322,14 @@ Shows your own referral stats as a private embed:
 
 ---
 
+#### `/points user:@User`
+
+Check any member's current point total and see who referred them. Ephemeral.
+
+---
+
 #### `/leaderboard [period] [start] [end]`
-*Available to everyone — posts publicly in channel*
+*Posts publicly in channel*
 
 Two-column leaderboard embed showing **Top Inviters** (by join count) and **Top Earners** (by points).
 
@@ -321,15 +347,15 @@ When a period is specified, both columns reflect that same period.
 
 > All admin commands require the role set in `ADMIN_ROLE_ID`.
 
-#### `/points user:@User`
+#### `/helpadmin`
 
-Displays a user's current point total and who referred them.
+Shows a full reference of every admin command and every button in the `/setup` and `/debug` panels. Ephemeral.
 
 ---
 
 #### `/referrals user:@User`
 
-Shows how many invite codes the user has created and lists every member they've successfully referred.
+Shows how many invite codes the user has created, lists every member they've successfully referred, and includes a **Fetch All Invites** button to cross-reference DB codes against live Discord invite data.
 
 ---
 
@@ -378,6 +404,7 @@ Opens the full admin debug panel. See [Debug Panel](#debug-panel) below.
 | 📢 **Test Referral Ch.** | Posts a clearly-labelled DEBUG embed to the configured referral channel to verify it is reachable. |
 | 📊 **Bot Status** | Shows a full status report: all DB table counts, point ledger size, invite cache size, uptime, WS latency, heap + RSS memory, Node.js version, and all config values. |
 | ⚙️ **View Config** | Dumps every row in `bot_config` as a quick reference. |
+| 🗑️ **Purge Unused Invites** | Scans all invite codes that are 15+ days old, deletes any with 0 uses from Discord, the database, and the in-memory cache. Reports purged / kept / error counts. |
 
 ---
 
@@ -634,8 +661,9 @@ SQLite database at `DB_PATH` (default: `./data/referralbuddy.db`). All timestamp
 
 | Table | Primary Key | Purpose |
 |---|---|---|
-| `bot_config` | `key` | Key-value store for `log_channel_id`, `referral_channel_id` |
-| `invite_codes` | `code` | Every tracked invite code with its owner (`created_by_id`) and whether the bot created it |
+| `bot_config` | `key` | Key-value store for `log_channel_id`, `referral_channel_id`, join point settings |
+| `invite_codes` | `code` | Every tracked invite code with its owner (`created_by_id`), whether the bot created it, and `existing_link` flag |
+| `invite_channels` | `channel_id` | Ordered pool of channels used for invite creation (cycled when a channel hits 50 invites) |
 | `referral_points` | `user_id` | Running point total per user (fast reads for all-time lookups) |
 | `point_ledger` | `id` (autoincrement) | Every point change with `delta`, `reason`, and `earned_at` timestamp — powers all period leaderboards |
 | `guild_members` | `user_id` | Join/leave status and referrer for every tracked member |
@@ -653,6 +681,8 @@ SQLite database at `DB_PATH` (default: `./data/referralbuddy.db`). All timestamp
 - **`point_ledger` is append-only.** The running total in `referral_points` is updated atomically alongside every ledger write. Period leaderboards always query the ledger; all-time leaderboards always query `referral_points` for speed.
 - **`getReferrer` is the only referrer lookup.** No event or command queries `guild_members.referrer_id` directly. If referrer resolution logic ever needs to change, it changes in one place.
 - **`syncInviteCode` vs `upsertInviteCode`.** Bot restarts use `syncInviteCode`, which preserves any human-claimed record (`created_by_bot = 0`). The referral button uses `upsertInviteCode`, which always overwrites. This ensures a restart never clobbers the real member ID stored when someone clicked "Get My Referral Link".
+- **`existing_link` flag on `invite_codes`.** When a member's permanent referral link is generated, the code is marked `existing_link = 1`. On every subsequent button press the DB is checked first — if a marked code exists, it is resent rather than generating a new one. This prevents the invite pool from filling up with duplicates and bypasses the cooldown for retrieval.
+- **Invite channel pool.** Discord limits each channel to 50 active invites. The `invite_channels` table stores an ordered list of channels for invite creation. `findInviteChannel()` fetches live invite counts from Discord and returns the first channel under the cap. When all channels are full, the button returns a clear error. Unused codes are purged automatically (15-day rule) to reclaim capacity.
 
 ---
 
@@ -682,10 +712,19 @@ SQLite database at `DB_PATH` (default: `./data/referralbuddy.db`). All timestamp
 - The member's DM settings may block messages from server members.
 - The link is always shown as an ephemeral reply in the referral channel as a fallback.
 
+**"Get My Referral Link" says I already have a link but I can't find it**
+- The bot found a code with `existing_link = 1` in the database and resent it.
+- If the invite was manually deleted from Discord, it will show as invalid when used. Use **Debug → Purge Unused Invites** to clean it up, then the member can press the button again to generate a fresh one.
+
+**"All invite channels are at capacity" error**
+- All configured invite channels have reached Discord's 50-invite limit.
+- Run **Debug → Purge Unused Invites** to remove zero-use codes and free up capacity.
+- Or add an additional channel via **Setup → Add Invite Channel**.
+
 **Slash commands don't appear in Discord**
 - Run `npm run deploy` to register them.
 - With `GUILD_ID`: instant. Without `GUILD_ID` (global): up to 1 hour.
-- Commands are visible to all members but only executable by holders of `ADMIN_ROLE_ID` (except `/stats` and `/leaderboard`, which are public).
+- Public commands: `/help`, `/stats`, `/points`, `/leaderboard`. Admin-only: `/helpadmin`, `/referrals`, `/setup`, `/debug`.
 
 **Log channel not receiving messages**
 - Run **Debug → Test All Logs** to fire a test message of every log type.

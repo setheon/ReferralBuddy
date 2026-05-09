@@ -12,11 +12,27 @@ function daysAgo(n) {
   return d.toISOString().replace('T', ' ').slice(0, 19);
 }
 
+/**
+ * Fetches each row's user_id from Discord and removes any that are bots.
+ * Uses the Discord.js user cache where possible — only makes an API call for
+ * users not already cached.
+ */
+async function filterBots(rows, client) {
+  const results = [];
+  for (const row of rows) {
+    const user = client.users.cache.get(row.user_id)
+      ?? await client.users.fetch(row.user_id).catch(() => null);
+    if (!user?.bot) results.push(row);
+  }
+  return results;
+}
+
 /** Renders the "Top Inviters" column value (join count). */
 function renderInviters(rows) {
-  if (!rows.length) return '*No data yet.*';
+  const filtered = rows.filter(r => r.join_count > 0).slice(0, 10);
+  if (!filtered.length) return '*No data yet.*';
   const medals = ['🥇', '🥈', '🥉'];
-  return rows.map((r, i) => {
+  return filtered.map((r, i) => {
     const medal = medals[i] ?? `\`${String(i + 1).padStart(2)}.\``;
     const noun  = r.join_count === 1 ? 'join' : 'joins';
     return `${medal} <@${r.user_id}> — **${r.join_count}** ${noun}`;
@@ -25,9 +41,10 @@ function renderInviters(rows) {
 
 /** Renders the "Top Earners" column value (points). */
 function renderEarners(rows) {
-  if (!rows.length) return '*No data yet.*';
+  const filtered = rows.filter(r => r.points > 0).slice(0, 10);
+  if (!filtered.length) return '*No data yet.*';
   const medals = ['🥇', '🥈', '🥉'];
-  return rows.map((r, i) => {
+  return filtered.map((r, i) => {
     const medal = medals[i] ?? `\`${String(i + 1).padStart(2)}.\``;
     return `${medal} <@${r.user_id}> — **${r.points.toLocaleString()}** pts`;
   }).join('\n');
@@ -89,13 +106,19 @@ module.exports = {
     await interaction.deferReply(); // public
 
     const period = interaction.options.getString('period');
+    const client = interaction.client;
     const guild  = interaction.guild;
+
+    // Fetch more than 10 from DB so we still have 10 after filtering out bots
+    const DB_LIMIT = 20;
 
     // ── Default: no period → This Month inviters | All Time earners ─────────────
     if (!period) {
-      const since       = daysAgo(30);
-      const inviterRows = db.getTopInviters(10, since);
-      const earnerRows  = db.getLeaderboard(10);
+      const since = daysAgo(30);
+      const [inviterRows, earnerRows] = await Promise.all([
+        filterBots(db.getTopInviters(DB_LIMIT, since), client),
+        filterBots(db.getLeaderboard(DB_LIMIT), client),
+      ]);
 
       if (!inviterRows.length && !earnerRows.length) {
         return interaction.editReply('No referral data on record yet.');
@@ -111,8 +134,10 @@ module.exports = {
 
     // ── All Time ────────────────────────────────────────────────────────────────
     if (period === 'all') {
-      const inviterRows = db.getTopInviters(10);
-      const earnerRows  = db.getLeaderboard(10);
+      const [inviterRows, earnerRows] = await Promise.all([
+        filterBots(db.getTopInviters(DB_LIMIT), client),
+        filterBots(db.getLeaderboard(DB_LIMIT), client),
+      ]);
 
       const embed = buildEmbed(
         'All Time', renderInviters(inviterRows),
@@ -141,8 +166,10 @@ module.exports = {
       const until = endStr ? `${endStr} 23:59:59` : null;
       const label = endStr && endStr !== startStr ? `${startStr} → ${endStr}` : startStr;
 
-      const inviterRows = db.getTopInviters(10, since, until);
-      const earnerRows  = db.getLeaderboardByPeriod(10, since, until);
+      const [inviterRows, earnerRows] = await Promise.all([
+        filterBots(db.getTopInviters(DB_LIMIT, since, until), client),
+        filterBots(db.getLeaderboardByPeriod(DB_LIMIT, since, until), client),
+      ]);
 
       const embed = buildEmbed(
         label, renderInviters(inviterRows),
@@ -161,9 +188,11 @@ module.exports = {
     };
 
     const { days, label } = periodMap[period];
-    const since       = daysAgo(days);
-    const inviterRows = db.getTopInviters(10, since);
-    const earnerRows  = db.getLeaderboardByPeriod(10, since);
+    const since = daysAgo(days);
+    const [inviterRows, earnerRows] = await Promise.all([
+      filterBots(db.getTopInviters(DB_LIMIT, since), client),
+      filterBots(db.getLeaderboardByPeriod(DB_LIMIT, since), client),
+    ]);
 
     const embed = buildEmbed(
       label, renderInviters(inviterRows),

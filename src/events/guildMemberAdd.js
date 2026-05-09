@@ -58,13 +58,12 @@ module.exports = {
       return;
     }
 
-    // ── Catalogue the member ──────────────────────────────────────────────────
-    const referrerId = inviteRow?.created_by_id ?? null;
-    db.upsertMember(member.id, { referrer_id: referrerId });
-
     // ── Skip point award checks ───────────────────────────────────────────────
     if (member.user.bot) return;
-    if (!inviteRow) return;
+    if (!inviteRow) {
+      db.upsertMember(member.id, { referrer_id: null });
+      return;
+    }
 
     // Bot-created invite with no human owner on record.
     // This means the invite exists in Discord (created by the bot on someone's
@@ -72,13 +71,28 @@ module.exports = {
     // no entry in invite_codes mapping this code to a real user. If the member
     // DID click the button, syncInviteCode preserves their ID across restarts
     // and created_by_bot will be false — so this branch is only hit for
-    // truly unowned bot-created invites.
+    // truly unowned bot-created invites (e.g. Disboard bump invites).
     if (inviteRow.created_by_bot) {
+      db.upsertMember(member.id, { referrer_id: null });
       await log(client, 'warn',
         `Member \`${member.id}\` joined via bot-created invite \`${usedCode}\` but no referral button owner is on record. No points awarded.`
       );
       return;
     }
+
+    // ── Verify the referrer is a real human, not a bot ────────────────────────
+    const referrerId = inviteRow.created_by_id;
+    const referrerUser = await client.users.fetch(referrerId).catch(() => null);
+    if (referrerUser?.bot) {
+      db.upsertMember(member.id, { referrer_id: null });
+      await log(client, 'warn',
+        `Member \`${member.id}\` joined via invite owned by bot \`${referrerId}\` — catalogued with no referrer.`
+      );
+      return;
+    }
+
+    // ── Catalogue the member with the verified human referrer ─────────────────
+    db.upsertMember(member.id, { referrer_id: referrerId });
 
     const existing = db.getMember(member.id);
     if (existing?.joined === 1)        return;

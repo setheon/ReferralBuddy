@@ -15,6 +15,7 @@ const {
 const db                                 = require('./database');
 const { log }                            = require('./logger');
 const { isAuthorized, denyUnauthorized } = require('./auth');
+const { startChannelTimer, stopChannelTimer, restartAdvert } = require('./advertManager');
 
 // ─── Button handlers ──────────────────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ async function handleSetupButton(interaction, client) {
     const select = new ChannelSelectMenuBuilder()
       .setCustomId('setup_select_log_channel')
       .setPlaceholder('Select a text channel for logs')
-      .setChannelTypes(ChannelType.GuildText);
+      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
 
     return interaction.reply({
       content: '**Select the log channel:**',
@@ -42,7 +43,7 @@ async function handleSetupButton(interaction, client) {
     const select = new ChannelSelectMenuBuilder()
       .setCustomId('setup_select_referral_channel')
       .setPlaceholder('Select a text channel for the referral panel')
-      .setChannelTypes(ChannelType.GuildText);
+      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
 
     return interaction.reply({
       content: '**Select the referral channel:**',
@@ -71,6 +72,9 @@ async function handleSetupButton(interaction, client) {
       });
     }
 
+    const bannerEmbed = new EmbedBuilder()
+      .setImage('https://media.discordapp.net/attachments/1311207930833408091/1498621103961018388/Advert_01.png?ex=69f1d32a&is=69f081aa&hm=6b05785db39e6002fe863b72c4fde4ccd59d7a8880441c8fe0e643fa8644630f&=&format=webp&quality=lossless&width=1672&height=469');
+
     const panelEmbed = new EmbedBuilder()
       .setColor(0x5865F2)
       .setTitle('🔗  VILTROX REFERRAL BUDDY')
@@ -93,19 +97,19 @@ async function handleSetupButton(interaction, client) {
         '**── Rewards ──**',
         'Accumulate points to unlock exclusive rewards!',
         'Use `/stats` to check your current standing.',
+        'Use `/leaderboard` to view the top inviters',
       ].join('\n'))
-      .setImage('https://media.discordapp.net/attachments/1491698407830720694/1491784039235977346/viltrox.png?ex=69f005e6&is=69eeb466&hm=8b43f44f666c66b60ab1e89b5c8843bcccad0e409cc0061861b33b14a73f52d6&=&format=webp&quality=lossless')
       .setFooter({ text: 'Your link is unique — do not share it with bots' });
 
     const panelRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('referral_get_link')
         .setLabel('Get My Referral Link')
-        .setStyle(ButtonStyle.Primary)
+        .setStyle(ButtonStyle.Success)
         .setEmoji('🔗')
     );
 
-    await channel.send({ embeds: [panelEmbed], components: [panelRow] });
+    await channel.send({ embeds: [bannerEmbed, panelEmbed], components: [panelRow] });
     await log(client, 'admin', `Admin \`${interaction.user.id}\` posted the referral panel in <#${channelId}>.`);
 
     return interaction.followUp({
@@ -246,6 +250,189 @@ async function handleSetupButton(interaction, client) {
     modal.addComponents(new ActionRowBuilder().addComponents(roleInput));
     return interaction.showModal(modal);
   }
+
+  // ── Add Invite Channel ───────────────────────────────────────────────────────
+  if (id === 'setup_btn_add_invite_channel') {
+    const select = new ChannelSelectMenuBuilder()
+      .setCustomId('setup_select_invite_channel')
+      .setPlaceholder('Select a text channel to use for invite creation')
+      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
+
+    return interaction.reply({
+      content: '**Select a channel to add to the invite pool:**\nInvites will be created here when other channels are full.',
+      components: [new ActionRowBuilder().addComponents(select)],
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Remove Invite Channel ────────────────────────────────────────────────────
+  if (id === 'setup_btn_remove_invite_channel') {
+    const channels = db.listInviteChannels();
+    if (!channels.length) {
+      return interaction.reply({
+        content: '❌ No invite channels are currently configured.',
+        flags: 1 << 6,
+      });
+    }
+
+    const select = new ChannelSelectMenuBuilder()
+      .setCustomId('setup_select_remove_invite_channel')
+      .setPlaceholder('Select the channel to remove from the invite pool')
+      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
+
+    return interaction.reply({
+      content: '**Select a channel to remove from the invite pool:**',
+      components: [new ActionRowBuilder().addComponents(select)],
+      flags: 1 << 6,
+    });
+  }
+
+  // ── View Invite Channels ─────────────────────────────────────────────────────
+  if (id === 'setup_btn_view_invite_channels') {
+    const channels = db.listInviteChannels();
+    const lines    = channels.length
+      ? channels.map((r, i) => `**${i + 1}.** <#${r.channel_id}> — added \`${r.added_at} UTC\``).join('\n')
+      : '*No invite channels configured — the bot will fall back to the Referral Channel.*';
+
+    return interaction.reply({
+      content: `**🔀 Invite Channels (${channels.length})**\n${lines}`,
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Chat Advert sub-panel ────────────────────────────────────────────────────
+  if (id === 'setup_btn_chat_advert') {
+    const enabled  = db.getConfig('advert_enabled') !== '0';
+    const hours    = db.getConfig('advert_interval_hours') ?? '1';
+    const channels = db.listAdvertChannels();
+    const chText   = channels.length
+      ? channels.map(r => `<#${r.channel_id}>`).join(', ')
+      : '*None*';
+
+    const statusTxt = enabled
+      ? `✅ Currently **enabled** — posting every **${hours}** hour(s)\nChannels: ${chText}`
+      : `❌ Currently **disabled**\nChannels: ${chText}`;
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('setup_advert_add_channel')
+        .setLabel('Add Channel')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('➕'),
+      new ButtonBuilder()
+        .setCustomId('setup_advert_remove_channel')
+        .setLabel('Remove Channel')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('➖'),
+      new ButtonBuilder()
+        .setCustomId('setup_advert_set_interval')
+        .setLabel('Set Interval')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('⏱️'),
+      new ButtonBuilder()
+        .setCustomId('setup_advert_enable')
+        .setLabel('Enable')
+        .setStyle(enabled ? ButtonStyle.Secondary : ButtonStyle.Success)
+        .setEmoji('✅')
+        .setDisabled(enabled),
+      new ButtonBuilder()
+        .setCustomId('setup_advert_disable')
+        .setLabel('Disable')
+        .setStyle(enabled ? ButtonStyle.Danger : ButtonStyle.Secondary)
+        .setEmoji('❌')
+        .setDisabled(!enabled),
+    );
+
+    return interaction.reply({
+      content: `**📢 Chat Advert**\n${statusTxt}`,
+      components: [row],
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Chat Advert: Add Channel ─────────────────────────────────────────────────
+  if (id === 'setup_advert_add_channel') {
+    return interaction.showModal(
+      new ModalBuilder()
+        .setCustomId('setup_modal_advert_add_channel')
+        .setTitle('Add Advert Channel')
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId('channel_id_input')
+              .setLabel('Channel ID')
+              .setStyle(TextInputStyle.Short)
+              .setPlaceholder('Right-click the channel → Copy Channel ID')
+              .setRequired(true)
+              .setMaxLength(20),
+          ),
+        ),
+    );
+  }
+
+  // ── Chat Advert: Remove Channel ──────────────────────────────────────────────
+  if (id === 'setup_advert_remove_channel') {
+    const channels = db.listAdvertChannels();
+    if (!channels.length) {
+      return interaction.reply({ content: '❌ No advert channels are configured.', flags: 1 << 6 });
+    }
+
+    const select = new ChannelSelectMenuBuilder()
+      .setCustomId('setup_select_advert_remove')
+      .setPlaceholder('Select a channel to remove from the advert schedule')
+      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
+
+    return interaction.reply({
+      content: '**Select a channel to remove from the advert schedule:**',
+      components: [new ActionRowBuilder().addComponents(select)],
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Chat Advert: Set Interval ────────────────────────────────────────────────
+  if (id === 'setup_advert_set_interval') {
+    const current = db.getConfig('advert_interval_hours') ?? '1';
+    const modal   = new ModalBuilder()
+      .setCustomId('setup_modal_advert_interval')
+      .setTitle('Set Advert Interval');
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('hours_input')
+          .setLabel('Hours between posts (e.g. 2 or 0.5)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('e.g. 1')
+          .setValue(current)
+          .setRequired(true)
+          .setMaxLength(6),
+      ),
+    );
+
+    return interaction.showModal(modal);
+  }
+
+  // ── Chat Advert: Enable ──────────────────────────────────────────────────────
+  if (id === 'setup_advert_enable') {
+    db.setConfig('advert_enabled', '1');
+    restartAdvert(client);
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` enabled the chat advert.`);
+    return interaction.update({
+      content: '✅ Chat advert **enabled** — timers started for all configured channels.',
+      components: [],
+    });
+  }
+
+  // ── Chat Advert: Disable ─────────────────────────────────────────────────────
+  if (id === 'setup_advert_disable') {
+    db.setConfig('advert_enabled', '0');
+    restartAdvert(client); // stopAdvert inside restartAdvert will clear timers
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` disabled the chat advert.`);
+    return interaction.update({
+      content: '❌ Chat advert **disabled** — all timers stopped.',
+      components: [],
+    });
+  }
 }
 
 // ─── Select menu handlers ─────────────────────────────────────────────────────
@@ -267,6 +454,29 @@ async function handleSetupSelect(interaction, client) {
     db.setConfig('referral_channel_id', channelId);
     await log(client, 'admin', `Admin \`${interaction.user.id}\` set referral channel to <#${channelId}>.`);
     return interaction.update({ content: `✅ Referral channel set to <#${channelId}>.`, components: [] });
+  }
+
+  if (id === 'setup_select_invite_channel') {
+    const channelId = interaction.values[0];
+    db.addInviteChannel(channelId);
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` added <#${channelId}> to the invite channel pool.`);
+    return interaction.update({ content: `✅ <#${channelId}> added to the invite channel pool.`, components: [] });
+  }
+
+  if (id === 'setup_select_remove_invite_channel') {
+    const channelId = interaction.values[0];
+    db.removeInviteChannel(channelId);
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` removed <#${channelId}> from the invite channel pool.`);
+    return interaction.update({ content: `✅ <#${channelId}> removed from the invite channel pool.`, components: [] });
+  }
+
+
+  if (id === 'setup_select_advert_remove') {
+    const channelId = interaction.values[0];
+    db.removeAdvertChannel(channelId);
+    stopChannelTimer(channelId);
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` removed <#${channelId}> from the advert schedule.`);
+    return interaction.update({ content: `✅ <#${channelId}> removed from the advert schedule.`, components: [] });
   }
 }
 
@@ -320,6 +530,50 @@ async function handleSetupModal(interaction, client) {
 
     return interaction.reply({
       content: `✅ <@&${role.id}> will now award **${points}** point(s) to referrers when their invitee receives it.`,
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Chat Advert: Add Channel ─────────────────────────────────────────────────
+  if (interaction.customId === 'setup_modal_advert_add_channel') {
+    const channelId = interaction.fields.getTextInputValue('channel_id_input').trim().replace(/[<#>]/g, '');
+
+    if (!/^\d{17,20}$/.test(channelId)) {
+      return interaction.reply({ content: '❌ That doesn\'t look like a valid channel ID. Right-click the channel and select **Copy Channel ID**.', flags: 1 << 6 });
+    }
+
+    const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased()) {
+      return interaction.reply({ content: `❌ Could not find a text channel with ID \`${channelId}\`. Make sure the bot has access to it.`, flags: 1 << 6 });
+    }
+
+    db.addAdvertChannel(channelId);
+    if (db.getConfig('advert_enabled') !== '0') startChannelTimer(channelId, client);
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` added <#${channelId}> to the advert schedule.`);
+
+    return interaction.reply({
+      content: `✅ <#${channelId}> added to the advert schedule.`,
+      flags: 1 << 6,
+    });
+  }
+
+  // ── Chat Advert: Set Interval ────────────────────────────────────────────────
+  if (interaction.customId === 'setup_modal_advert_interval') {
+    const raw   = interaction.fields.getTextInputValue('hours_input').trim();
+    const hours = parseFloat(raw);
+
+    if (isNaN(hours) || hours < 0.1) {
+      return interaction.reply({ content: '❌ Interval must be a number ≥ 0.1 (e.g. 1 or 0.5).', flags: 1 << 6 });
+    }
+
+    db.setConfig('advert_interval_hours', String(hours));
+    restartAdvert(client);
+    await log(client, 'admin',
+      `Admin \`${interaction.user.id}\` set advert interval to **${hours}** hour(s). Timers restarted.`
+    );
+
+    return interaction.reply({
+      content: `✅ Advert interval set to **${hours}** hour(s). All timers restarted.`,
       flags: 1 << 6,
     });
   }
@@ -381,17 +635,31 @@ const SETUP_BUTTON_IDS = new Set([
   'setup_join_customise',
   'setup_btn_add_milestone',
   'setup_btn_remove_milestone',
+  'setup_btn_add_invite_channel',
+  'setup_btn_remove_invite_channel',
+  'setup_btn_view_invite_channels',
+  'setup_btn_chat_advert',
+  'setup_advert_add_channel',
+  'setup_advert_remove_channel',
+  'setup_advert_set_interval',
+  'setup_advert_enable',
+  'setup_advert_disable',
 ]);
 
 const SETUP_SELECT_IDS = new Set([
   'setup_select_log_channel',
   'setup_select_referral_channel',
+  'setup_select_invite_channel',
+  'setup_select_remove_invite_channel',
+  'setup_select_advert_remove',
 ]);
 
 const SETUP_MODAL_IDS = new Set([
   'setup_modal_join_points',
   'setup_modal_add_milestone',
   'setup_modal_remove_milestone',
+  'setup_modal_advert_add_channel',
+  'setup_modal_advert_interval',
 ]);
 
 function isSetupButton(id) { return SETUP_BUTTON_IDS.has(id); }
