@@ -26,30 +26,42 @@ async function handleSetupButton(interaction, client) {
 
   // ── Log Channel ──────────────────────────────────────────────────────────────
   if (id === 'setup_btn_log_channel') {
-    const select = new ChannelSelectMenuBuilder()
-      .setCustomId('setup_select_log_channel')
-      .setPlaceholder('Select a text channel for logs')
-      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
-
-    return interaction.reply({
-      content: '**Select the log channel:**',
-      components: [new ActionRowBuilder().addComponents(select)],
-      flags: 1 << 6,
-    });
+    return interaction.showModal(
+      new ModalBuilder()
+        .setCustomId('setup_modal_log_channel')
+        .setTitle('Set Log Channel')
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId('channel_id_input')
+              .setLabel('Channel ID')
+              .setStyle(TextInputStyle.Short)
+              .setPlaceholder('Right-click the channel → Copy Channel ID')
+              .setRequired(true)
+              .setMaxLength(20),
+          ),
+        ),
+    );
   }
 
   // ── Referral Channel ─────────────────────────────────────────────────────────
   if (id === 'setup_btn_referral_channel') {
-    const select = new ChannelSelectMenuBuilder()
-      .setCustomId('setup_select_referral_channel')
-      .setPlaceholder('Select a text channel for the referral panel')
-      .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
-
-    return interaction.reply({
-      content: '**Select the referral channel:**',
-      components: [new ActionRowBuilder().addComponents(select)],
-      flags: 1 << 6,
-    });
+    return interaction.showModal(
+      new ModalBuilder()
+        .setCustomId('setup_modal_referral_channel')
+        .setTitle('Set Referral Channel')
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId('channel_id_input')
+              .setLabel('Channel ID')
+              .setStyle(TextInputStyle.Short)
+              .setPlaceholder('Right-click the channel → Copy Channel ID')
+              .setRequired(true)
+              .setMaxLength(20),
+          ),
+        ),
+    );
   }
 
   // ── Post Panel ───────────────────────────────────────────────────────────────
@@ -442,19 +454,6 @@ async function handleSetupSelect(interaction, client) {
 
   const id = interaction.customId;
 
-  if (id === 'setup_select_log_channel') {
-    const channelId = interaction.values[0];
-    db.setConfig('log_channel_id', channelId);
-    await log(client, 'admin', `Admin \`${interaction.user.id}\` set log channel to <#${channelId}>.`);
-    return interaction.update({ content: `✅ Log channel set to <#${channelId}>.`, components: [] });
-  }
-
-  if (id === 'setup_select_referral_channel') {
-    const channelId = interaction.values[0];
-    db.setConfig('referral_channel_id', channelId);
-    await log(client, 'admin', `Admin \`${interaction.user.id}\` set referral channel to <#${channelId}>.`);
-    return interaction.update({ content: `✅ Referral channel set to <#${channelId}>.`, components: [] });
-  }
 
   if (id === 'setup_select_invite_channel') {
     const channelId = interaction.values[0];
@@ -484,6 +483,42 @@ async function handleSetupSelect(interaction, client) {
 
 async function handleSetupModal(interaction, client) {
   if (!isAuthorized(interaction.member)) return denyUnauthorized(interaction);
+
+  // ── Log Channel ──────────────────────────────────────────────────────────────
+  if (interaction.customId === 'setup_modal_log_channel') {
+    const channelId = interaction.fields.getTextInputValue('channel_id_input').trim().replace(/[<#>]/g, '');
+
+    if (!/^\d{17,20}$/.test(channelId)) {
+      return interaction.reply({ content: '❌ That doesn\'t look like a valid channel ID. Right-click the channel and select **Copy Channel ID**.', flags: 1 << 6 });
+    }
+
+    const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased()) {
+      return interaction.reply({ content: `❌ Could not find a text channel with ID \`${channelId}\`. Make sure the bot has access to it.`, flags: 1 << 6 });
+    }
+
+    db.setConfig('log_channel_id', channelId);
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` set log channel to <#${channelId}>.`);
+    return interaction.reply({ content: `✅ Log channel set to <#${channelId}>.`, flags: 1 << 6 });
+  }
+
+  // ── Referral Channel ─────────────────────────────────────────────────────────
+  if (interaction.customId === 'setup_modal_referral_channel') {
+    const channelId = interaction.fields.getTextInputValue('channel_id_input').trim().replace(/[<#>]/g, '');
+
+    if (!/^\d{17,20}$/.test(channelId)) {
+      return interaction.reply({ content: '❌ That doesn\'t look like a valid channel ID. Right-click the channel and select **Copy Channel ID**.', flags: 1 << 6 });
+    }
+
+    const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased()) {
+      return interaction.reply({ content: `❌ Could not find a text channel with ID \`${channelId}\`. Make sure the bot has access to it.`, flags: 1 << 6 });
+    }
+
+    db.setConfig('referral_channel_id', channelId);
+    await log(client, 'admin', `Admin \`${interaction.user.id}\` set referral channel to <#${channelId}>.`);
+    return interaction.reply({ content: `✅ Referral channel set to <#${channelId}>.`, flags: 1 << 6 });
+  }
 
   // ── Customise Join Points ────────────────────────────────────────────────────
   if (interaction.customId === 'setup_modal_join_points') {
@@ -647,14 +682,14 @@ const SETUP_BUTTON_IDS = new Set([
 ]);
 
 const SETUP_SELECT_IDS = new Set([
-  'setup_select_log_channel',
-  'setup_select_referral_channel',
   'setup_select_invite_channel',
   'setup_select_remove_invite_channel',
   'setup_select_advert_remove',
 ]);
 
 const SETUP_MODAL_IDS = new Set([
+  'setup_modal_log_channel',
+  'setup_modal_referral_channel',
   'setup_modal_join_points',
   'setup_modal_add_milestone',
   'setup_modal_remove_milestone',
